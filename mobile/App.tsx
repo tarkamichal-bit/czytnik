@@ -17,6 +17,8 @@ import { StatusBar } from 'expo-status-bar';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Speech from 'expo-speech';
 import * as SecureStore from 'expo-secure-store';
+import * as Clipboard from 'expo-clipboard';
+import { File } from 'expo-file-system';
 import { useKeepAwake } from 'expo-keep-awake';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -126,8 +128,10 @@ function Main() {
       return next;
     });
   }, []);
-  const saveKey = useCallback(async () => {
-    const k = keyDraft.trim();
+  const [keyMsg, setKeyMsg] = useState<string | null>(null);
+  const saveKey = useCallback(async (value?: string) => {
+    const k = (value ?? keyDraft).trim();
+    setKeyDraft(k);
     try {
       if (k) await SecureStore.setItemAsync('anthropic_api_key', k);
       else await SecureStore.deleteItemAsync('anthropic_api_key');
@@ -135,6 +139,30 @@ function Main() {
     setApiKey(k);
     if (k) update({ engine: 'claude' });
   }, [keyDraft, update]);
+  // the key is long: instead of typing it, take it from the clipboard or from a text file on the phone
+  const KEY_RE = /sk-ant-[A-Za-z0-9_\-]{20,}/;
+  const keyFromClipboard = useCallback(async () => {
+    try {
+      const m = (await Clipboard.getStringAsync()).match(KEY_RE);
+      if (!m) { setKeyMsg('W schowku nie ma klucza (zaczyna się od sk-ant-).'); return; }
+      await saveKey(m[0]);
+      setKeyMsg('Klucz wklejony i zapisany.');
+    } catch {
+      setKeyMsg('Nie udało się odczytać schowka.');
+    }
+  }, [saveKey]);
+  const keyFromFile = useCallback(async () => {
+    try {
+      const res = await File.pickFileAsync({ mimeTypes: '*/*' });
+      if (res.canceled) return;
+      const m = (await res.result.text()).match(KEY_RE);
+      if (!m) { setKeyMsg('W tym pliku nie ma klucza (zaczyna się od sk-ant-).'); return; }
+      await saveKey(m[0]);
+      setKeyMsg('Klucz wczytany i zapisany. Plik możesz teraz usunąć z telefonu.');
+    } catch {
+      setKeyMsg('Nie udało się odczytać pliku.');
+    }
+  }, [saveKey]);
 
   const hasTranslation = !!reading && reading.segments.some((g) => g.translation && g.translation !== g.text);
   const spokenOf = useCallback(
@@ -551,7 +579,7 @@ function Main() {
             <Text style={s.hintSmall}>
               Claude poprawia polskie litery i tłumaczy lepiej. Płatne z Twojego konta API Anthropic: {CLAUDE_MODEL}, ${PRICE_IN} za 1 mln tokenów wejścia i ${PRICE_OUT} za 1 mln tokenów wyjścia.
             </Text>
-            {settings.engine === 'claude' && (
+            {(settings.engine === 'claude' || mode === 'senior' || !apiKey) && (
               <>
                 <Text style={s.label}>Klucz API Claude</Text>
                 <TextInput
@@ -565,10 +593,15 @@ function Main() {
                   style={s.input}
                 />
                 <View style={s.grid}>
-                  <Option s={s} label={apiKey && keyDraft.trim() === apiKey ? 'Zapisany' : 'Zapisz klucz'} on={!!apiKey && keyDraft.trim() === apiKey} onPress={saveKey} />
+                  <Option s={s} label={apiKey && keyDraft.trim() === apiKey ? 'Zapisany' : 'Zapisz klucz'} on={!!apiKey && keyDraft.trim() === apiKey} onPress={() => saveKey()} />
+                  <Option s={s} label="Wklej ze schowka" on={false} onPress={keyFromClipboard} />
+                  <Option s={s} label="Wczytaj z pliku" on={false} onPress={keyFromFile} />
                   <Option s={s} label="Wyzeruj licznik" on={false} onPress={() => { setUsage(NO_USAGE); AsyncStorage.removeItem('czytnik.usage').catch(() => {}); }} />
                 </View>
-                <Text style={s.hintSmall}>Klucz utworzysz na platform.claude.com w zakładce API Keys. Jest przechowywany w zaszyfrowanym magazynie telefonu.</Text>
+                {keyMsg ? <Text style={[s.hintSmall, { color: t.ink }]}>{keyMsg}</Text> : null}
+                <Text style={s.hintSmall}>
+                  Klucz utworzysz na platform.claude.com w zakładce API Keys. Nie musisz go przepisywać: skopiuj go i naciśnij „Wklej ze schowka” albo zapisz w pliku tekstowym na telefonie (np. w Pobranych) i naciśnij „Wczytaj z pliku”. Klucz jest przechowywany w zaszyfrowanym magazynie telefonu.
+                </Text>
               </>
             )}
 
