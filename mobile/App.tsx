@@ -8,10 +8,9 @@ import {
   ScrollView,
   StyleSheet,
   Switch,
-  Text,
-  TextInput,
   View,
 } from 'react-native';
+import { Text, TextInput } from './src/Text';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -28,11 +27,12 @@ import {
 } from '@expo-google-fonts/atkinson-hyperlegible';
 import Reader, { Box, CropResult, OcrWord, SavedPage } from './modules/reader-mlkit/src/ReaderMlkitModule';
 import Eraser from './src/Eraser';
+import Camera from './src/Camera';
 import FullReader from './src/FullReader';
 import {
   DEFAULTS, Engine, NO_USAGE, RATES, Settings, VoiceStyle, TARGETS, THEMES, Usage, VOICES, fmtInt, fmtUsd, langName, tokenAt, tokenize, voiceOf, voiceTag, wordClock,
 } from './src/shared';
-import { BigButton, BusyOverlay, Chip, Option, makeStyles } from './src/ui';
+import { BigButton, BusyOverlay, Chip, IconButton, Option, OverlayButton, makeStyles } from './src/ui';
 import ComicMode from './src/ComicMode';
 import Background from './src/Background';
 import { MODELS, modelOf } from './src/pricing';
@@ -98,6 +98,7 @@ function Main() {
   const [torch, setTorch] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [lensSize, setLensSize] = useState({ w: 0, h: 0 });
+  const [immersive, setImmersive] = useState(false);
   const [cursor, setCursor] = useState<{ seg: number; token: number | null } | null>(null);
   const cameraRef = useRef<CameraView>(null);
   const speakToken = useRef(0);
@@ -401,6 +402,7 @@ function Main() {
     <View style={[s.fill, { paddingTop: insets.top }]}>
       <Background contrast={settings.contrast} />
       <StatusBar style={t.bar} />
+      {!immersive && (<>
       {/* header */}
       <View style={s.header}>
         <Text style={s.h1}>Czytnik</Text>
@@ -415,7 +417,7 @@ function Main() {
           <Pressable
             key={m.v}
             style={[s.tab, mode === m.v && s.tabOn]}
-            onPress={() => { stopSpeaking(); setReading(null); setError(null); setMode(m.v); }}
+            onPress={() => { stopSpeaking(); setReading(null); setError(null); setImmersive(false); setMode(m.v); }}
             accessibilityRole="tab"
             accessibilityState={{ selected: mode === m.v }}
           >
@@ -426,6 +428,7 @@ function Main() {
       {senior && !apiKey && reading === null && (
         <Text style={s.error}>Do drobnego i nieostrego druku dodaj klucz Claude w Ustawieniach. Bez niego czytam rozpoznawaniem z telefonu.</Text>
       )}
+      </>)}
 
       {mode === 'comic' ? (
         <ComicMode
@@ -435,23 +438,23 @@ function Main() {
           apiKey={apiKey}
           addUsage={addUsage}
           bottomInset={settings.engine === 'claude' ? 6 : insets.bottom + 12}
+          immersive={immersive}
+          onImmersive={setImmersive}
         />
       ) : (
       <>
       {/* lens: live camera, or the photo being read */}
       <View style={[s.lens, reading ? s.lensReading : null]} onLayout={onLensLayout}>
         {reading ? (
-          lensSize.w > 0 && renderPhoto(reading)
+          <>
+            {lensSize.w > 0 && renderPhoto(reading)}
+            {reading.segments.length > 0 && (
+              <OverlayButton s={s} icon="expand" label="Pełny ekran" onPress={() => update({ layout: 'full' })} pos={{ right: 10, bottom: 10 }} />
+            )}
+          </>
         ) : (
           <>
-            <CameraView
-              ref={cameraRef}
-              style={StyleSheet.absoluteFill}
-              facing="back"
-              autofocus="on"
-              enableTorch={torch}
-              onCameraReady={() => setCameraReady(true)}
-            />
+            <Camera cameraRef={cameraRef} torch={torch} onReady={setCameraReady} />
             <View
               pointerEvents="none"
               style={[s.frameGuide, { left: `${FRAME.left * 100}%`, right: `${(1 - FRAME.right) * 100}%`, top: `${FRAME.top * 100}%`, bottom: `${(1 - FRAME.bottom) * 100}%` }]}
@@ -473,9 +476,6 @@ function Main() {
               <Chip s={s} text={reading.lang === settings.target ? langName(reading.lang) : `${langName(reading.lang)} → ${langName(settings.target)}`} color={reading.lang === settings.target ? t.muted : t.ok} />
             ) : null}
             <Chip s={s} text={reading.engine === 'claude' ? 'Claude' : 'Telefon'} color={t.muted} />
-            <Pressable onPress={() => update({ layout: 'full' })} style={[s.smallBtn, { minHeight: 40 }]} accessibilityRole="button" accessibilityLabel="Pokaż zdjęcie na całym ekranie">
-              <Text style={s.smallBtnText}>Duży obraz</Text>
-            </Pressable>
             {reading.note ? <Chip s={s} text={reading.note} color={t.warn} /> : null}
           </View>
           {hasTranslation && (
@@ -524,38 +524,22 @@ function Main() {
       <View style={[s.bar, { paddingBottom: (settings.engine === 'claude' ? 6 : insets.bottom + 12) }]}>
         {reading === null ? (
           <>
-            <BigButton s={s} label="Czytaj" onPress={readPhoto} disabled={!cameraReady || !!busy} flex />
-            <Pressable
-              style={[s.big, s.secondary, torch && s.pressed]}
-              onPress={() => setTorch((v) => !v)}
-              accessibilityRole="switch"
-              accessibilityState={{ checked: torch }}
-              accessibilityLabel="Latarka"
-            >
-              <Text style={[s.bigText, torch && s.pressedText]}>{torch ? 'Latarka\nwł.' : 'Latarka'}</Text>
-            </Pressable>
+            <BigButton s={s} t={t} icon="camera" label="Czytaj" onPress={readPhoto} disabled={!cameraReady || !!busy} flex />
+            <IconButton s={s} t={t} icon="torch" label={torch ? 'Wyłącz' : 'Latarka'} on={torch} onPress={() => setTorch((v) => !v)} />
           </>
         ) : (
           <>
-            <BigButton s={s} label="Nowe zdjęcie" onPress={newPhoto} flex />
-            <Pressable
-              style={[s.big, s.secondary, { minWidth: 92, paddingHorizontal: 10 }, !!busy && { opacity: 0.4 }]}
-              onPress={openEraser}
-              disabled={!!busy}
-              accessibilityRole="button"
-              accessibilityLabel="Gumka: zamaż część zdjęcia, której nie trzeba czytać"
-            >
-              <Text style={s.bigText}>Gumka</Text>
-            </Pressable>
-            <Pressable
-              style={[s.big, s.secondary, cursor !== null && s.pressed]}
+            <IconButton s={s} t={t} icon="camera" label="Nowe" onPress={newPhoto} />
+            <IconButton s={s} t={t} icon="eraser" label="Gumka" onPress={openEraser} disabled={!!busy} />
+            <BigButton
+              s={s}
+              t={t}
+              icon={cursor !== null ? 'stop' : 'play'}
+              label={cursor !== null ? 'Stop' : 'Czytaj'}
               onPress={() => (cursor !== null ? stopSpeaking() : speakFrom(reading, 0, view, speakLang, effRate, effVoice))}
               disabled={!reading.segments.length}
-              accessibilityRole="button"
-              accessibilityLabel={cursor !== null ? 'Zatrzymaj czytanie' : 'Czytaj na głos'}
-            >
-              <Text style={[s.bigText, cursor !== null && s.pressedText]}>{cursor !== null ? 'Stop' : 'Czytaj\nna głos'}</Text>
-            </Pressable>
+              flex
+            />
           </>
         )}
       </View>
@@ -564,12 +548,11 @@ function Main() {
       )}
 
       {/* Claude usage counter */}
-      {(settings.engine === 'claude' || (senior && !!apiKey)) && (
+      {!immersive && (settings.engine === 'claude' || (senior && !!apiKey)) && (
         <View style={[s.usage, { paddingBottom: insets.bottom + 8 }]}>
           {apiKey ? (
-            <Text style={s.usageText}>
-              Ostatnio: {fmtInt(usage.lastIn)} + {fmtInt(usage.lastOut)} tok. = {fmtUsd(usage.lastCost)}
-              {'   '}Razem ({usage.count}): {fmtInt(usage.totIn + usage.totOut)} tok. = {fmtUsd(usage.totCost)}
+            <Text style={s.usageText} numberOfLines={1} adjustsFontSizeToFit>
+              Ostatnio {fmtInt(usage.lastIn + usage.lastOut)} tok. · {fmtUsd(usage.lastCost)}   Razem {fmtInt(usage.totIn + usage.totOut)} tok. · {fmtUsd(usage.totCost)}
             </Text>
           ) : (
             <Text style={s.usageText}>Podaj klucz API Claude w Ustawieniach.</Text>

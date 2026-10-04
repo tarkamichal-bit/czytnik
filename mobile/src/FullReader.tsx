@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Image, LayoutChangeEvent, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Easing, Image, LayoutChangeEvent, Pressable, StyleSheet, View } from 'react-native';
+import { Text } from './Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Box, OcrWord } from '../modules/reader-mlkit/src/ReaderMlkitModule';
-import { FONT, FONT_BOLD, Theme, Token } from './shared';
-import { S } from './ui';
+import { FONT, FONT_BOLD, Theme, Token, shift } from './shared';
+import { OverlayButton, S } from './ui';
+import Icon from './Icon';
 
 type Seg = { box?: Box; words: OcrWord[] };
 type Props = {
@@ -60,10 +62,8 @@ export default function FullReader(p: Props) {
         else z = Math.max(1, (size.h * 0.9) / bh);
       }
     }
-    // keep the photo on screen: no empty margins beyond its edges
-    const clamp = (v: number, view: number, content: number) => (content <= view ? (view - content) / 2 : Math.min(0, Math.max(view - content, v)));
-    const x = clamp(size.w / 2 - z * cx, size.w, W * z);
-    const y = clamp(size.h / 2 - z * cy, size.h, H * z);
+    const x = shift(size.w / 2 - z * cx, size.w, W, z);
+    const y = shift(size.h / 2 - z * cy, size.h, H, z);
     const cfg = { duration: 450, easing: Easing.inOut(Easing.cubic), useNativeDriver: true };
     Animated.parallel([
       Animated.timing(zoom, { toValue: z, ...cfg }),
@@ -83,7 +83,6 @@ export default function FullReader(p: Props) {
           <Animated.View
             style={{
               position: 'absolute', left: 0, top: 0, width: W, height: H,
-              transformOrigin: 'top left',
               transform: [{ translateX: tx }, { translateY: ty }, { scale: zoom }],
             }}
           >
@@ -102,6 +101,7 @@ export default function FullReader(p: Props) {
             {p.wordBox && <View pointerEvents="none" style={[p.s.wordBox, place(p.wordBox, 3)]} />}
           </Animated.View>
         )}
+        <OverlayButton s={p.s} icon="shrink" label="Zamknij pełny ekran" onPress={p.onSplit} pos={{ right: 10, top: 10 }} />
       </View>
 
       <Text style={c.caption} numberOfLines={2}>
@@ -111,17 +111,17 @@ export default function FullReader(p: Props) {
       </Text>
 
       <View style={c.bar}>
-        <Pressable style={c.btn} onPress={p.onSplit} accessibilityRole="button" accessibilityLabel="Pokaż obraz i tekst">
-          <Text style={c.btnText}>Obraz{'\n'}i tekst</Text>
+        <Pressable style={c.btn} onPress={p.onNew} accessibilityRole="button" accessibilityLabel="Nowe zdjęcie">
+          <Icon name="camera" size={24} color="#fff" />
+          <Text style={c.btnText}>Nowe</Text>
         </Pressable>
         <Pressable style={c.btn} onPress={p.onErase} accessibilityRole="button" accessibilityLabel="Gumka">
+          <Icon name="eraser" size={24} color="#fff" />
           <Text style={c.btnText}>Gumka</Text>
         </Pressable>
-        <Pressable style={c.btn} onPress={p.onNew} accessibilityRole="button">
-          <Text style={c.btnText}>Nowe{'\n'}zdjęcie</Text>
-        </Pressable>
         <Pressable style={[c.btn, c.main, p.playing && c.mainOn]} onPress={p.onPlayStop} accessibilityRole="button">
-          <Text style={[c.btnText, c.mainText]}>{p.playing ? 'Stop' : 'Czytaj'}</Text>
+          <Icon name={p.playing ? 'stop' : 'play'} size={24} color={p.t.lensInk} />
+          <Text style={[c.mainText]}>{p.playing ? 'Stop' : 'Czytaj'}</Text>
         </Pressable>
       </View>
     </View>
@@ -132,12 +132,12 @@ function styles(t: Theme) {
   return StyleSheet.create({
     root: { position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, backgroundColor: '#0d1424', paddingHorizontal: 10, gap: 8 },
     viewer: { flex: 1, borderRadius: 14, overflow: 'hidden', backgroundColor: '#000' },
-    caption: { fontFamily: FONT, fontSize: 22, lineHeight: 30, color: '#fff', minHeight: 60, paddingHorizontal: 6 },
+    caption: { fontFamily: FONT, fontSize: 19, lineHeight: 26, color: '#fff', minHeight: 52, paddingHorizontal: 6 },
     bar: { flexDirection: 'row', gap: 8 },
-    btn: { flex: 1, minHeight: 64, borderRadius: 16, borderWidth: 2, borderColor: '#cfd6e6', alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
-    btnText: { fontFamily: FONT_BOLD, fontSize: 16, color: '#fff', textAlign: 'center' },
-    main: { flex: 1.3, backgroundColor: t.lens, borderColor: t.lens },
+    btn: { width: 72, minHeight: 60, borderRadius: 16, borderWidth: 1.5, borderColor: 'rgba(207,214,230,0.6)', alignItems: 'center', justifyContent: 'center', gap: 2 },
+    btnText: { fontFamily: FONT_BOLD, fontSize: 12, color: '#fff', textAlign: 'center' },
+    main: { flex: 1, width: undefined, flexDirection: 'row', gap: 8, backgroundColor: t.lens, borderColor: t.lens },
     mainOn: { backgroundColor: '#fff', borderColor: '#fff' },
-    mainText: { color: t.lensInk, fontSize: 20 },
+    mainText: { fontFamily: FONT_BOLD, color: t.lensInk, fontSize: 19 },
   });
 }

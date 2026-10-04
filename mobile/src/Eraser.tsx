@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
-import { Image, LayoutChangeEvent, Modal, PanResponder, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, LayoutChangeEvent, Modal, PanResponder, Pressable, StyleSheet, View } from 'react-native';
+import { Text } from './Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle, Path } from 'react-native-svg';
 import Reader, { SavedPage } from '../modules/reader-mlkit/src/ReaderMlkitModule';

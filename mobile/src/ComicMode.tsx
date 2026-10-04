@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Image, LayoutChangeEvent, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Animated, Easing, Image, LayoutChangeEvent, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Text } from './Text';
 import { CameraView } from 'expo-camera';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Speech from 'expo-speech';
 import Reader, { Box, SavedPage } from '../modules/reader-mlkit/src/ReaderMlkitModule';
 import Eraser from './Eraser';
+import Camera from './Camera';
 import { ANALYSIS_VERSION, Comic, PageAnalysis, analyzePage, loadComics, saveComics } from './comics';
-import { FONT, FONT_BOLD, Settings, Theme, langName, tokenAt, tokenize, voiceOf, voiceTag, wordClock } from './shared';
-import { BigButton, BusyOverlay, Chip, S } from './ui';
+import { FONT, FONT_BOLD, Settings, Theme, langName, tokenAt, tokenize, voiceOf, voiceTag, wordClock, shift } from './shared';
+import { BigButton, BusyOverlay, Chip, IconButton, OverlayButton, S } from './ui';
+import Icon from './Icon';
 
 type Props = {
   s: S;
@@ -15,6 +19,8 @@ type Props = {
   apiKey: string;
   addUsage: (inTok: number, outTok: number, cost: number) => void;
   bottomInset: number;
+  immersive: boolean;
+  onImmersive: (on: boolean) => void;
 };
 
 type Screen = { kind: 'list' } | { kind: 'capture'; comicId: string; firstNew: number } | { kind: 'read'; comicId: string; page: number };
@@ -22,7 +28,9 @@ type Cursor = { scene: number; bubble: number | null; token: number | null };
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInset }: Props) {
+
+export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInset, immersive, onImmersive }: Props) {
+  const insets = useSafeAreaInsets();
   const c = styles(t);
   const [comics, setComics] = useState<Comic[]>([]);
   const [screen, setScreen] = useState<Screen>({ kind: 'list' });
@@ -114,8 +122,8 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
         const cx = (b.left + b.width / 2) * base, cy = (b.top + b.height / 2) * base;
         Animated.parallel([
           Animated.timing(zoom, { toValue: z, duration: 700, easing: Easing.inOut(Easing.cubic), useNativeDriver: true }),
-          Animated.timing(tx, { toValue: size.w / 2 - z * cx, duration: 700, easing: Easing.inOut(Easing.cubic), useNativeDriver: true }),
-          Animated.timing(ty, { toValue: size.h / 2 - z * cy, duration: 700, easing: Easing.inOut(Easing.cubic), useNativeDriver: true }),
+          Animated.timing(tx, { toValue: shift(size.w / 2 - z * cx, size.w, page.width * base, z), duration: 700, easing: Easing.inOut(Easing.cubic), useNativeDriver: true }),
+          Animated.timing(ty, { toValue: shift(size.h / 2 - z * cy, size.h, page.height * base, z), duration: 700, easing: Easing.inOut(Easing.cubic), useNativeDriver: true }),
         ]).start(() => resolve());
       }),
     [page, size, base, zoom, tx, ty],
@@ -123,6 +131,10 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
   const showWholePage = useCallback(() => {
     if (page) focus({ left: 0, top: 0, width: page.width, height: page.height });
   }, [page, focus]);
+
+  // playback runs across renders (e.g. full screen switched on mid-page): always aim with the current size
+  const aim = useRef({ focus, whole: showWholePage });
+  aim.current = { focus, whole: showWholePage };
 
   // ---------- reader: speech ----------
   const stop = useCallback(() => {
@@ -144,7 +156,7 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
       for (let si = sceneIdx; si < a.scenes.length; si++) {
         const sc = a.scenes[si];
         setCursor({ scene: si, bubble: null, token: null });
-        await focus(sc.box);
+        await aim.current.focus(sc.box);
         if (token !== playToken.current) return;
         if (!sc.bubbles.length) { await sleep(1500); if (token !== playToken.current) return; continue; }
         for (let bi = si === sceneIdx ? bubbleIdx : 0; bi < sc.bubbles.length; bi++) {
@@ -182,9 +194,9 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
       setPlaying(false);
       setCursor(null);
       setPageDone(true);
-      showWholePage();
+      aim.current.whole();
     },
-    [settings.target, settings.rate, voice, focus, showWholePage],
+    [settings.target, settings.rate, voice],
   );
 
   // ---------- reader: load page ----------
@@ -202,7 +214,7 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
     if (screen.kind !== 'read' || !comic || !page || !size.w) return;
     let cancelled = false;
     (async () => {
-      zoom.setValue(1); tx.setValue(0); ty.setValue(0);
+      showWholePage();
       const wantClaude = settings.engine === 'claude' && !!apiKey;
       let a = page.analysis;
       const usable = a && a.version === ANALYSIS_VERSION && a.target === settings.target && (a.engine === 'claude' || !wantClaude);
@@ -235,12 +247,20 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screen.kind === 'read' ? `${screen.comicId}:${screen.page}:${page?.uri ?? ''}` : '', size.w > 0]);
 
+  // the viewer changed size (full screen on/off): aim again at what is being read
+  useEffect(() => {
+    if (!size.w || screen.kind !== 'read') return;
+    const scn = cursor && analysis ? analysis.scenes[cursor.scene] : null;
+    if (scn) focus(scn.box); else showWholePage();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size.w, size.h]);
+
   const onLayout = (e: LayoutChangeEvent) => setSize({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height });
 
   // ---------- render: list ----------
   if (screen.kind === 'list') {
     return (
-      <View style={{ flex: 1 }}>
+      <View key="list" style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={c.listWrap}>
           <Text style={c.lead}>Zrób zdjęcia stron komiksu, a lektor przeczyta go kadr po kadrze.</Text>
           {comics.map((x) => (
@@ -268,7 +288,7 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
           {!comics.length && <Text style={c.empty}>Nie masz jeszcze komiksów. Zacznij od pierwszej strony.</Text>}
         </ScrollView>
         <View style={[s.bar, { paddingBottom: bottomInset }]}>
-          <BigButton s={s} label="Nowy komiks" onPress={newComic} flex />
+          <BigButton s={s} t={t} icon="plus" label="Nowy komiks" onPress={newComic} flex />
         </View>
       </View>
     );
@@ -278,38 +298,29 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
   if (screen.kind === 'capture') {
     const n = comic?.pages.length ?? 0;
     return (
-      <View style={{ flex: 1 }}>
+      <View key="capture" style={{ flex: 1 }}>
         {eraser}
         <View style={s.lens}>
-          <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" autofocus="on" enableTorch={torch} onCameraReady={() => setCameraReady(true)} />
+          <Camera cameraRef={cameraRef} torch={torch} onReady={setCameraReady} />
           <View pointerEvents="none" style={c.pageGuide} />
+          <Pressable onPress={() => setTorch((v) => !v)} style={[c.torch, torch && c.torchOn]} accessibilityRole="switch" accessibilityLabel="Latarka" accessibilityState={{ checked: torch }}>
+            <Icon name="torch" size={22} color={torch ? '#14213d' : '#fff'} />
+          </Pressable>
           {busy && <BusyOverlay s={s} text={busy} t={t} />}
         </View>
         <ScrollView horizontal style={c.strip} contentContainerStyle={c.stripInner}>
           {comic?.pages.map((p, i) => (
             <Pressable key={p.uri} onPress={() => editPage(comic.id, i)} accessibilityRole="button" accessibilityLabel={`Gumka na stronie ${i + 1}`}>
-              <Image source={{ uri: p.uri }} style={[c.mini, i >= screen.firstNew && c.miniNew]} />
+              <Image source={{ uri: p.uri }} style={[c.mini, i >= screen.firstNew && c.miniNew]} resizeMethod="resize" />
             </Pressable>
           ))}
-          <Text style={c.stripText}>{n ? `Stron: ${n}. Dotknij strony, aby użyć gumki.` : 'Zmieść całą stronę w kadrze.'}</Text>
+          <Text style={c.stripText} numberOfLines={2}>{n ? `${n} str.\nDotknij = gumka` : 'Zmieść całą stronę w ramce.'}</Text>
         </ScrollView>
         <View style={[s.bar, { paddingBottom: bottomInset }]}>
-          <Pressable style={[s.big, s.secondary]} onPress={() => setScreen({ kind: 'list' })} accessibilityRole="button">
-            <Text style={s.bigText}>Wróć</Text>
-          </Pressable>
-          <BigButton s={s} label="Zdjęcie strony" onPress={shoot} disabled={!cameraReady || !!busy} flex />
-          <Pressable
-            style={[s.big, s.secondary, !n && { opacity: 0.4 }]}
-            disabled={!n}
-            onPress={() => comic && openPage(comic.id, Math.min(screen.firstNew, n - 1))}
-            accessibilityRole="button"
-          >
-            <Text style={s.bigText}>Czytaj</Text>
-          </Pressable>
+          <IconButton s={s} t={t} icon="back" label="Wróć" onPress={() => setScreen({ kind: 'list' })} />
+          <BigButton s={s} t={t} icon="camera" label="Zdjęcie" onPress={shoot} disabled={!cameraReady || !!busy} flex />
+          <IconButton s={s} t={t} icon="play" label="Czytaj" disabled={!n} onPress={() => comic && openPage(comic.id, Math.min(screen.firstNew, n - 1))} />
         </View>
-        <Pressable onPress={() => setTorch((v) => !v)} style={c.torch} accessibilityRole="switch" accessibilityState={{ checked: torch }}>
-          <Text style={c.torchText}>{torch ? 'Latarka wł.' : 'Latarka'}</Text>
-        </Pressable>
       </View>
     );
   }
@@ -329,17 +340,31 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
   }
   const place = (b: Box, pad = 0) => ({ left: b.left * base - pad, top: b.top * base - pad, width: b.width * base + 2 * pad, height: b.height * base + 2 * pad });
   const totalScenes = analysis?.scenes.length ?? 0;
-  const textSize = Math.min(settings.size, 30);
+  const textSize = Math.min(settings.size, 22);
+
+  const prevPage = () => (pageIdx > 0 && comic ? openPage(comic.id, pageIdx - 1) : (stop(), onImmersive(false), setScreen({ kind: 'list' })));
+  const nextPage = () => {
+    if (!comic) return;
+    if (pageIdx < pages - 1) openPage(comic.id, pageIdx + 1);
+    else { stop(); onImmersive(false); setScreen({ kind: 'capture', comicId: comic.id, firstNew: pages }); }
+  };
+  const playStop = () => (playing ? stop() : analysis && playFrom(analysis, pageDone ? 0 : cursor?.scene ?? 0, 0, view));
+  const caption = bub
+    ? tokens.map((tk, i) => (
+        <Text key={i} style={cursor?.token === i ? s.now : undefined}>{tk.text}{i < tokens.length - 1 ? ' ' : ''}</Text>
+      ))
+    : pageDone
+      ? 'Koniec strony.'
+      : analysis && !totalScenes ? 'Na tej stronie nie znalazłem tekstu.' : ' ';
 
   return (
-    <View style={{ flex: 1 }}>
+    <View key="read" style={{ flex: 1 }}>
       {eraser}
-      <View style={[s.lens, c.viewer]} onLayout={onLayout}>
+      <View style={immersive ? c.viewerFull : [s.lens, c.viewer]} onLayout={onLayout}>
         {page && size.w > 0 && (
           <Animated.View
             style={{
               position: 'absolute', left: 0, top: 0, width: page.width * base, height: page.height * base,
-              transformOrigin: 'top left',
               transform: [{ translateX: tx }, { translateY: ty }, { scale: zoom }],
             }}
           >
@@ -358,105 +383,101 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
             {wordBox && <View pointerEvents="none" style={[c.word, place(wordBox, 2)]} />}
           </Animated.View>
         )}
+        <OverlayButton
+          s={s}
+          icon={immersive ? 'shrink' : 'expand'}
+          label={immersive ? 'Zamknij pełny ekran' : 'Pełny ekran'}
+          onPress={() => onImmersive(!immersive)}
+          pos={{ right: 10, top: 10 }}
+        />
+        {immersive && (
+          <View style={[c.band, { paddingBottom: insets.bottom + 10 }]}>
+            <Text style={c.bandText} numberOfLines={2}>{caption}</Text>
+            <View style={c.bandRow}>
+              <Pressable style={c.round} onPress={prevPage} accessibilityRole="button" accessibilityLabel={pageIdx > 0 ? 'Poprzednia strona' : 'Wróć do listy'}>
+                <Icon name={pageIdx > 0 ? 'prev' : 'list'} size={26} color="#fff" />
+              </Pressable>
+              <Pressable style={[c.round, c.roundMain]} onPress={playStop} disabled={!analysis} accessibilityRole="button" accessibilityLabel={playing ? 'Stop' : 'Czytaj'}>
+                <Icon name={playing ? 'stop' : 'play'} size={30} color="#14213d" />
+              </Pressable>
+              <Pressable style={c.round} onPress={nextPage} accessibilityRole="button" accessibilityLabel={pageIdx < pages - 1 ? 'Następna strona' : 'Dodaj stronę'}>
+                <Icon name={pageIdx < pages - 1 ? 'next' : 'plus'} size={26} color="#fff" />
+              </Pressable>
+            </View>
+          </View>
+        )}
         {busy && <BusyOverlay s={s} text={busy} t={t} />}
       </View>
 
-      <View style={c.info}>
-        <Chip s={s} text={`Strona ${pageIdx + 1}/${pages}`} color={t.muted} />
-        {comic && (
-          <Pressable onPress={() => editPage(comic.id, pageIdx)} style={c.switch} accessibilityRole="button" accessibilityLabel="Gumka: zamaż część strony, której nie trzeba czytać">
-            <Text style={c.switchText}>Gumka</Text>
-          </Pressable>
-        )}
-        {totalScenes > 0 && <Chip s={s} text={`Kadr ${(cursor?.scene ?? 0) + 1}/${totalScenes}`} color={t.muted} />}
-        {analysis && analysis.lang !== settings.target && <Chip s={s} text={`${langName(analysis.lang)} → ${langName(settings.target)}`} color={t.ok} />}
-        {translated && (
-          <Pressable onPress={() => { stop(); setView(view === 'tr' ? 'or' : 'tr'); }} style={c.switch} accessibilityRole="button">
-            <Text style={c.switchText}>{view === 'tr' ? 'Pokaż oryginał' : 'Pokaż tłumaczenie'}</Text>
-          </Pressable>
-        )}
-        {analysis?.note ? <Chip s={s} text={analysis.note} color={t.warn} /> : null}
-      </View>
-      <View style={c.textBox}>
-        <Text style={[c.text, { fontSize: textSize, lineHeight: textSize * 1.4 }]} numberOfLines={4}>
-          {bub
-            ? tokens.map((tk, i) => (
-                <Text key={i} style={cursor?.token === i ? s.now : undefined}>{tk.text}{i < tokens.length - 1 ? ' ' : ''}</Text>
-              ))
-            : pageDone
-              ? 'Koniec strony.'
-              : analysis && !totalScenes ? 'Na tej stronie nie znalazłem tekstu.' : ' '}
-        </Text>
-      </View>
+      {!immersive && (
+        <>
+          <View style={c.info}>
+            <Chip s={s} text={`Strona ${pageIdx + 1}/${pages}`} color={t.muted} />
+            {totalScenes > 0 && <Chip s={s} text={`Kadr ${(cursor?.scene ?? 0) + 1}/${totalScenes}`} color={t.muted} />}
+            {analysis && analysis.lang !== settings.target && <Chip s={s} text={`${langName(analysis.lang)} → ${langName(settings.target)}`} color={t.ok} />}
+            {translated && (
+              <Pressable onPress={() => { stop(); setView(view === 'tr' ? 'or' : 'tr'); }} style={c.switch} accessibilityRole="button">
+                <Text style={c.switchText}>{view === 'tr' ? 'Oryginał' : 'Tłumaczenie'}</Text>
+              </Pressable>
+            )}
+            {analysis?.note ? <Chip s={s} text={analysis.note} color={t.warn} /> : null}
+          </View>
+          <View style={c.textBox}>
+            <Text style={[c.text, { fontSize: textSize, lineHeight: textSize * 1.35 }]} numberOfLines={3}>{caption}</Text>
+          </View>
 
-      <View style={[s.bar, { paddingBottom: bottomInset }]}>
-        <Pressable
-          style={[s.big, s.secondary, c.smallBig]}
-          onPress={() => (pageIdx > 0 && comic ? openPage(comic.id, pageIdx - 1) : (stop(), setScreen({ kind: 'list' })))}
-          accessibilityRole="button"
-          accessibilityLabel={pageIdx > 0 ? 'Poprzednia strona' : 'Wróć do listy'}
-        >
-          <Text style={s.bigText}>{pageIdx > 0 ? '◀' : 'Lista'}</Text>
-        </Pressable>
-        <Pressable
-          style={[s.big, s.secondary, { flex: 1 }, playing && s.pressed]}
-          onPress={() => (playing ? stop() : analysis && playFrom(analysis, pageDone ? 0 : cursor?.scene ?? 0, 0, view))}
-          disabled={!analysis}
-          accessibilityRole="button"
-        >
-          <Text style={[s.bigText, playing && s.pressedText]}>{playing ? 'Stop' : pageDone ? 'Jeszcze raz' : 'Czytaj'}</Text>
-        </Pressable>
-        <Pressable
-          style={[s.big, { flex: 1.3 }, !pageDone && s.secondary, pageIdx >= pages - 1 && !pageDone && { opacity: 0.5 }]}
-          onPress={() => {
-            if (!comic) return;
-            if (pageIdx < pages - 1) openPage(comic.id, pageIdx + 1);
-            else { stop(); setScreen({ kind: 'capture', comicId: comic.id, firstNew: pages }); }
-          }}
-          accessibilityRole="button"
-        >
-          <Text style={s.bigText}>{pageIdx < pages - 1 ? 'Następna\nstrona' : 'Dodaj\nstronę'}</Text>
-        </Pressable>
-      </View>
+          <View style={[s.bar, { paddingBottom: bottomInset }]}>
+            <IconButton s={s} t={t} icon={pageIdx > 0 ? 'prev' : 'list'} label={pageIdx > 0 ? 'Wstecz' : 'Lista'} onPress={prevPage} />
+            {comic && <IconButton s={s} t={t} icon="eraser" label="Gumka" onPress={() => editPage(comic.id, pageIdx)} />}
+            <BigButton s={s} t={t} icon={playing ? 'stop' : 'play'} label={playing ? 'Stop' : pageDone ? 'Od nowa' : 'Czytaj'} onPress={playStop} disabled={!analysis} flex />
+            <IconButton s={s} t={t} icon={pageIdx < pages - 1 ? 'next' : 'plus'} label={pageIdx < pages - 1 ? 'Dalej' : 'Dodaj'} on={pageDone} onPress={nextPage} />
+          </View>
+        </>
+      )}
     </View>
   );
 }
 
 function styles(t: Theme) {
   return StyleSheet.create({
-    listWrap: { padding: 16, gap: 12 },
-    lead: { fontFamily: FONT, fontSize: 19, color: t.muted },
-    empty: { fontFamily: FONT, fontSize: 20, color: t.muted, textAlign: 'center', marginTop: 24 },
-    card: { flexDirection: 'row', gap: 12, padding: 12, borderRadius: 18, borderWidth: 2, borderColor: t.line, backgroundColor: t.surface },
-    thumb: { width: 84, height: 112, borderRadius: 10, backgroundColor: '#ddd' },
+    listWrap: { padding: 12, gap: 10 },
+    lead: { fontFamily: FONT, fontSize: 16, color: t.muted },
+    empty: { fontFamily: FONT, fontSize: 17, color: t.muted, textAlign: 'center', marginTop: 24 },
+    card: { flexDirection: 'row', gap: 12, padding: 10, borderRadius: 16, borderWidth: 1.5, borderColor: t.line, backgroundColor: t.surface },
+    thumb: { width: 72, height: 96, borderRadius: 8, backgroundColor: '#ddd' },
     thumbEmpty: { borderWidth: 2, borderStyle: 'dashed', borderColor: t.line, backgroundColor: 'transparent' },
-    cardBody: { flex: 1, gap: 6, minWidth: 0 },
-    cardTitle: { fontFamily: FONT_BOLD, fontSize: 22, color: t.ink },
-    cardMeta: { fontFamily: FONT, fontSize: 17, color: t.muted },
-    cardBtns: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-    btn: { minHeight: 48, paddingHorizontal: 14, borderRadius: 12, borderWidth: 2, borderColor: t.line, backgroundColor: t.surface, justifyContent: 'center' },
-    btnText: { fontFamily: FONT_BOLD, fontSize: 17, color: t.ink },
-    btnYellow: { minHeight: 48, paddingHorizontal: 18, borderRadius: 12, borderWidth: 2, borderColor: t.ink, backgroundColor: t.lens, justifyContent: 'center' },
-    btnYellowText: { fontFamily: FONT_BOLD, fontSize: 17, color: t.lensInk },
+    cardBody: { flex: 1, gap: 4, minWidth: 0 },
+    cardTitle: { fontFamily: FONT_BOLD, fontSize: 18, color: t.ink },
+    cardMeta: { fontFamily: FONT, fontSize: 14, color: t.muted },
+    cardBtns: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 2 },
+    btn: { minHeight: 40, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1.5, borderColor: t.line, backgroundColor: t.surface, justifyContent: 'center' },
+    btnText: { fontFamily: FONT_BOLD, fontSize: 14, color: t.ink },
+    btnYellow: { minHeight: 40, paddingHorizontal: 16, borderRadius: 10, borderWidth: 1.5, borderColor: t.ink, backgroundColor: t.lens, justifyContent: 'center' },
+    btnYellowText: { fontFamily: FONT_BOLD, fontSize: 14, color: t.lensInk },
     btnDanger: { borderColor: t.warn },
     btnDangerText: { color: t.warn },
     pageGuide: { position: 'absolute', left: '5%', right: '5%', top: '4%', bottom: '4%', borderWidth: 3, borderStyle: 'dashed', borderColor: 'rgba(255,210,63,0.9)', borderRadius: 10 },
-    strip: { flexGrow: 0, marginTop: 8 },
-    stripInner: { paddingHorizontal: 16, gap: 8, alignItems: 'center' },
-    mini: { width: 42, height: 56, borderRadius: 6, borderWidth: 2, borderColor: t.line },
+    strip: { flexGrow: 0, marginTop: 6 },
+    stripInner: { paddingHorizontal: 12, gap: 6, alignItems: 'center' },
+    mini: { width: 36, height: 48, borderRadius: 5, borderWidth: 2, borderColor: t.line },
     miniNew: { borderColor: t.lens },
-    stripText: { fontFamily: FONT_BOLD, fontSize: 18, color: t.muted, marginLeft: 4 },
-    torch: { position: 'absolute', right: 28, top: 12, minHeight: 44, paddingHorizontal: 14, borderRadius: 12, backgroundColor: 'rgba(13,20,36,0.7)', justifyContent: 'center' },
-    torchText: { fontFamily: FONT_BOLD, fontSize: 16, color: '#fff' },
-    viewer: { flex: 1.6, backgroundColor: '#0d1424' },
+    stripText: { fontFamily: FONT_BOLD, fontSize: 13, color: t.muted, marginLeft: 4 },
+    torch: { position: 'absolute', right: 10, top: 10, width: 48, height: 48, borderRadius: 24, backgroundColor: 'rgba(13,20,36,0.72)', alignItems: 'center', justifyContent: 'center' },
+    torchOn: { backgroundColor: '#ffd23f' },
+    viewer: { flex: 1, backgroundColor: '#0d1424' },
+    viewerFull: { flex: 1, backgroundColor: '#000', overflow: 'hidden' },
     bubble: { position: 'absolute', borderRadius: 8 },
     bubbleNow: { borderWidth: 3, borderColor: '#ffd23f', backgroundColor: 'rgba(255,210,63,0.18)' },
     word: { position: 'absolute', borderWidth: 2, borderColor: '#e63946', borderRadius: 4, backgroundColor: 'rgba(255,233,138,0.45)' },
-    info: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, paddingTop: 10, alignItems: 'center' },
-    switch: { minHeight: 36, paddingHorizontal: 12, borderRadius: 999, borderWidth: 2, borderColor: t.ink, justifyContent: 'center', backgroundColor: t.surface },
-    switchText: { fontFamily: FONT_BOLD, fontSize: 15, color: t.ink },
-    textBox: { paddingHorizontal: 18, paddingTop: 8, minHeight: 64 },
+    info: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 12, paddingTop: 8, alignItems: 'center' },
+    switch: { minHeight: 30, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1.5, borderColor: t.ink, justifyContent: 'center', backgroundColor: t.surface },
+    switchText: { fontFamily: FONT_BOLD, fontSize: 13, color: t.ink },
+    textBox: { paddingHorizontal: 14, paddingTop: 6, minHeight: 52 },
     text: { fontFamily: FONT, color: t.ink },
-    smallBig: { minWidth: 76, paddingHorizontal: 10 },
+    band: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingTop: 10, paddingHorizontal: 14, gap: 10, backgroundColor: 'rgba(0,0,0,0.62)' },
+    bandText: { fontFamily: FONT, fontSize: 18, lineHeight: 25, color: '#fff', minHeight: 25 },
+    bandRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 28 },
+    round: { width: 52, height: 52, borderRadius: 26, borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.7)', alignItems: 'center', justifyContent: 'center' },
+    roundMain: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#ffd23f', borderColor: '#ffd23f' },
   });
 }
