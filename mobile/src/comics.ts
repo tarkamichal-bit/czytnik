@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Reader, { Box, OcrWord, SavedPage } from '../modules/reader-mlkit/src/ReaderMlkitModule';
 import { Engine, langName } from './shared';
+import { ModelId } from './pricing';
 
 // A speech bubble or caption, and the panel ("scene") it belongs to.
 export type Bubble = { text: string; translation: string; box: Box; words: OcrWord[] };
@@ -42,6 +43,7 @@ function readingOrder<T extends { box: Box }>(items: T[]): T[] {
 
 type Analyze = {
   engine: Engine;
+  model: ModelId;
   apiKey: string;
   target: string;
   onBusy: (msg: string) => void;
@@ -94,7 +96,7 @@ export async function analyzePage(page: SavedPage, o: Analyze): Promise<PageAnal
         const c = center(b.box);
         return { text: b.text, x: Math.round((c.x / page.width) * 1000), y: Math.round((c.y / page.height) * 1000) };
       });
-      const c = await claude.readComicWithClaude(o.apiKey, img.base64 ?? '', pos, o.target, langName(o.target));
+      const c = await claude.readComicWithClaude(o.model, o.apiKey, img.base64 ?? '', pos, o.target, langName(o.target));
       o.addUsage(c.inputTokens, c.outputTokens, c.costUsd);
       if (c.blocks.length === bubbles.length) {
         const skip = new Set(c.blocks.flatMap((b, i) => (b.kind === 'page_number' || b.kind === 'other' || !b.text ? [i] : [])));

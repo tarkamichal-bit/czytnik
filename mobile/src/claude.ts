@@ -2,7 +2,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import * as z from 'zod/v4';
 
-import { CLAUDE_MODEL, PRICE_IN, PRICE_OUT } from './pricing';
+import { ModelId, modelOf } from './pricing';
 
 const ReadingSchema = z.object({
   lang: z.string(),
@@ -19,11 +19,13 @@ export type ClaudeReading = {
 
 export class ClaudeRefusal extends Error {}
 
-export function costOf(inputTokens: number, outputTokens: number) {
-  return (inputTokens * PRICE_IN + outputTokens * PRICE_OUT) / 1_000_000;
+export function costOf(model: ModelId, inputTokens: number, outputTokens: number) {
+  const m = modelOf(model);
+  return (inputTokens * m.in + outputTokens * m.out) / 1_000_000;
 }
 
 export async function readWithClaude(
+  model: ModelId,
   apiKey: string,
   jpegBase64: string,
   ocrBlocks: string[],
@@ -56,7 +58,7 @@ export async function readWithClaude(
       : '');
 
   const msg = await client.beta.messages.parse({
-    model: CLAUDE_MODEL,
+    model,
     max_tokens: opts.careful ? 16000 : 8000,
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
@@ -81,7 +83,7 @@ export async function readWithClaude(
     blocks: out.blocks.map((b) => ({ text: b.text.trim(), translation: b.translation.trim() })),
     inputTokens,
     outputTokens,
-    costUsd: costOf(inputTokens, outputTokens),
+    costUsd: costOf(model, inputTokens, outputTokens),
   };
 }
 
@@ -114,6 +116,7 @@ export type ClaudeComic = {
 /** Comic page: fixes the OCR text of every bubble, says what each block is (so page numbers and
  *  publisher notes are skipped) and gives the order in which a reader goes through the bubbles. */
 export async function readComicWithClaude(
+  model: ModelId,
   apiKey: string,
   jpegBase64: string,
   ocrBlocks: { text: string; x: number; y: number }[],
@@ -136,7 +139,7 @@ export async function readComicWithClaude(
     `W "lang" podaj kod ISO 639-1 języka komiksu.`;
 
   const msg = await client.beta.messages.parse({
-    model: CLAUDE_MODEL,
+    model,
     max_tokens: 12000,
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
@@ -164,7 +167,7 @@ export async function readComicWithClaude(
     order,
     inputTokens,
     outputTokens,
-    costUsd: costOf(inputTokens, outputTokens),
+    costUsd: costOf(model, inputTokens, outputTokens),
   };
 }
 

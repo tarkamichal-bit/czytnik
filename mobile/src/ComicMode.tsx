@@ -5,7 +5,7 @@ import * as Speech from 'expo-speech';
 import Reader, { Box, SavedPage } from '../modules/reader-mlkit/src/ReaderMlkitModule';
 import Eraser from './Eraser';
 import { ANALYSIS_VERSION, Comic, PageAnalysis, analyzePage, loadComics, saveComics } from './comics';
-import { FONT, FONT_BOLD, Settings, Theme, langName, tokenAt, tokenize, voiceOf, voiceTag } from './shared';
+import { FONT, FONT_BOLD, Settings, Theme, langName, tokenAt, tokenize, voiceOf, voiceTag, wordClock } from './shared';
 import { BigButton, BusyOverlay, Chip, S } from './ui';
 
 type Props = {
@@ -153,16 +153,25 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
           const tokens = tokenize(text);
           setCursor({ scene: si, bubble: bi, token: 0 });
           await new Promise<void>((resolve) => {
+            const ck: { c?: ReturnType<typeof wordClock> } = {};
+            const end = () => { ck.c?.stop(); resolve(); };
             Speech.speak(text, {
               language: voiceTag(lang),
               rate: settings.rate * voice.rateMul,
               pitch: voice.pitch,
+              onStart: () => {
+                ck.c = wordClock(tokens, settings.rate * voice.rateMul, (k) => {
+                  if (token === playToken.current) setCursor({ scene: si, bubble: bi, token: k });
+                  else ck.c?.stop();
+                });
+              },
               onBoundary: (ev: { charIndex?: number }) => {
+                ck.c?.real();
                 if (token === playToken.current && typeof ev?.charIndex === 'number') setCursor({ scene: si, bubble: bi, token: tokenAt(tokens, ev.charIndex) });
               },
-              onDone: () => resolve(),
-              onStopped: () => resolve(),
-              onError: () => resolve(),
+              onDone: end,
+              onStopped: end,
+              onError: end,
             });
           });
           if (token !== playToken.current) return;
@@ -199,7 +208,7 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
       const usable = a && a.version === ANALYSIS_VERSION && a.target === settings.target && (a.engine === 'claude' || !wantClaude);
       if (!usable) {
         try {
-          a = await analyzePage(page, { engine: settings.engine, apiKey, target: settings.target, onBusy: setBusy, addUsage });
+          a = await analyzePage(page, { engine: settings.engine, model: settings.model, apiKey, target: settings.target, onBusy: setBusy, addUsage });
         } catch {
           a = undefined;
         }

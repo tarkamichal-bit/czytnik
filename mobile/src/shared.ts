@@ -1,3 +1,4 @@
+import { DEFAULT_MODEL, ModelId } from './pricing';
 // ---------- languages ----------
 export const LANGS: Record<string, string> = {
   pl: 'polski', en: 'angielski', de: 'niemiecki', uk: 'ukraiński', fr: 'francuski', es: 'hiszpański',
@@ -32,8 +33,9 @@ export const FONT_BOLD = 'AtkinsonHyperlegible_700Bold';
 // ---------- settings ----------
 export type Engine = 'phone' | 'claude';
 export type VoiceStyle = 'normal' | 'teller' | 'elf' | 'giant';
-export type Settings = { target: string; rate: number; autoRead: boolean; contrast: boolean; size: number; engine: Engine; voice: VoiceStyle; comicVoice: VoiceStyle };
-export const DEFAULTS: Settings = { target: 'pl', rate: 0.9, autoRead: true, contrast: false, size: 28, engine: 'phone', voice: 'normal', comicVoice: 'elf' };
+export type Layout = 'full' | 'split';
+export type Settings = { target: string; rate: number; autoRead: boolean; contrast: boolean; size: number; engine: Engine; voice: VoiceStyle; comicVoice: VoiceStyle; model: ModelId; layout: Layout };
+export const DEFAULTS: Settings = { target: 'pl', rate: 0.9, autoRead: true, contrast: false, size: 28, engine: 'phone', voice: 'normal', comicVoice: 'elf', model: DEFAULT_MODEL, layout: 'full' };
 // Fairy-tale voices are the system voice with a changed pitch (Android: 0.5-2.0) and tempo
 export const VOICES: { v: VoiceStyle; label: string; pitch: number; rateMul: number }[] = [
   { v: 'normal', label: 'Zwykły', pitch: 1.0, rateMul: 1.0 },
@@ -71,4 +73,26 @@ export function fmtInt(n: number) {
 }
 export function fmtUsd(n: number) {
   return '$' + (n < 1 ? n.toFixed(4) : n.toFixed(2)).replace('.', ',');
+}
+
+/**
+ * Some Android voices never report which word they are saying (no onBoundary events).
+ * Until the first real event arrives, the highlighted word is estimated from the elapsed time
+ * (about 14 characters per second at normal tempo).
+ */
+export function wordClock(tokens: Token[], rate: number, onToken: (i: number) => void) {
+  const start = Date.now();
+  let real = false;
+  let last = -1;
+  const cps = 14 * rate;
+  const id = setInterval(() => {
+    if (real) return;
+    const i = tokenAt(tokens, ((Date.now() - start) / 1000) * cps);
+    if (i !== last) { last = i; onToken(i); }
+  }, 120);
+  return {
+    /** a real boundary event arrived: stop guessing */
+    real: () => { real = true; },
+    stop: () => clearInterval(id),
+  };
 }

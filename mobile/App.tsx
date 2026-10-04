@@ -28,13 +28,14 @@ import {
 } from '@expo-google-fonts/atkinson-hyperlegible';
 import Reader, { Box, CropResult, OcrWord, SavedPage } from './modules/reader-mlkit/src/ReaderMlkitModule';
 import Eraser from './src/Eraser';
+import FullReader from './src/FullReader';
 import {
-  DEFAULTS, Engine, NO_USAGE, RATES, Settings, VoiceStyle, TARGETS, THEMES, Usage, VOICES, fmtInt, fmtUsd, langName, tokenAt, tokenize, voiceOf, voiceTag,
+  DEFAULTS, Engine, NO_USAGE, RATES, Settings, VoiceStyle, TARGETS, THEMES, Usage, VOICES, fmtInt, fmtUsd, langName, tokenAt, tokenize, voiceOf, voiceTag, wordClock,
 } from './src/shared';
 import { BigButton, BusyOverlay, Chip, Option, makeStyles } from './src/ui';
 import ComicMode from './src/ComicMode';
 import Background from './src/Background';
-import { CLAUDE_MODEL, PRICE_IN, PRICE_OUT } from './src/pricing';
+import { MODELS, modelOf } from './src/pricing';
 
 // The Anthropic SDK is loaded only when Claude is used, so a problem there can never stop the app from starting.
 const loadClaude = () => require('./src/claude') as typeof import('./src/claude');
@@ -194,16 +195,25 @@ function Main() {
         if (!text.trim()) { next(i + 1); return; }
         const tokens = tokenize(text);
         setCursor({ seg: i, token: 0 });
+        const ck: { c?: ReturnType<typeof wordClock> } = {};
         Speech.speak(text, {
           language: voiceTag(lang),
           rate: rate * vs.rateMul,
           pitch: vs.pitch,
+          onStart: () => {
+            ck.c = wordClock(tokens, rate * vs.rateMul, (k) => {
+              if (token === speakToken.current) setCursor({ seg: i, token: k });
+              else ck.c?.stop();
+            });
+          },
           onBoundary: (ev: { charIndex?: number }) => {
+            ck.c?.real();
             if (token !== speakToken.current || typeof ev?.charIndex !== 'number') return;
             setCursor({ seg: i, token: tokenAt(tokens, ev.charIndex) });
           },
-          onDone: () => next(i + 1),
-          onError: () => { if (token === speakToken.current) setCursor(null); },
+          onDone: () => { ck.c?.stop(); next(i + 1); },
+          onStopped: () => ck.c?.stop(),
+          onError: () => { ck.c?.stop(); if (token === speakToken.current) setCursor(null); },
         });
       };
       next(startSeg);
@@ -234,7 +244,7 @@ function Main() {
         let claude: typeof import('./src/claude') | null = null;
         try {
           claude = loadClaude();
-          const c = await claude.readWithClaude(apiKey, crop.base64, base.map((g) => g.text), settings.target, langName(settings.target), { careful: senior });
+          const c = await claude.readWithClaude(settings.model, apiKey, crop.base64, base.map((g) => g.text), settings.target, langName(settings.target), { careful: senior });
           addUsage(c.inputTokens, c.outputTokens, c.costUsd);
           lang = c.lang || settings.target;
           engine = 'claude';
@@ -344,6 +354,16 @@ function Main() {
   }
 
   // ---------- photo with highlights ----------
+  // word highlight only when the voice reads the words that are on the photo
+  const wordBoxOf = (r: Reading): Box | null => {
+    const cur = cursor ? r.segments[cursor.seg] : null;
+    if (!cur || !cursor || cursor.token === null || view !== 'or' || !cur.words.length) return null;
+    const spokenCount = Math.max(1, tokenize(cur.text).length);
+    const idx = spokenCount === cur.words.length
+      ? cursor.token
+      : Math.round((cursor.token * (cur.words.length - 1)) / Math.max(1, spokenCount - 1));
+    return cur.words[Math.min(cur.words.length - 1, Math.max(0, idx))];
+  };
   const renderPhoto = (r: Reading) => {
     const { w, h } = lensSize;
     const k = Math.min(w / r.imgW, h / r.imgH);
@@ -352,16 +372,7 @@ function Main() {
     const place = (b: Box, pad = 0) => ({
       left: ox + b.left * k - pad, top: oy + b.top * k - pad, width: b.width * k + 2 * pad, height: b.height * k + 2 * pad,
     });
-    const cur = cursor ? r.segments[cursor.seg] : null;
-    // word highlight only when the voice reads the words that are on the photo
-    let wordBox: Box | null = null;
-    if (cur && cursor && cursor.token !== null && view === 'or' && cur.words.length) {
-      const spokenCount = Math.max(1, tokenize(cur.text).length);
-      const idx = spokenCount === cur.words.length
-        ? cursor.token
-        : Math.round((cursor.token * (cur.words.length - 1)) / Math.max(1, spokenCount - 1));
-      wordBox = cur.words[Math.min(cur.words.length - 1, Math.max(0, idx))];
-    }
+    const wordBox = wordBoxOf(r);
     return (
       <>
         <Image source={{ uri: r.photoUri }} style={StyleSheet.absoluteFill} resizeMode="contain" />
@@ -462,6 +473,9 @@ function Main() {
               <Chip s={s} text={reading.lang === settings.target ? langName(reading.lang) : `${langName(reading.lang)} → ${langName(settings.target)}`} color={reading.lang === settings.target ? t.muted : t.ok} />
             ) : null}
             <Chip s={s} text={reading.engine === 'claude' ? 'Claude' : 'Telefon'} color={t.muted} />
+            <Pressable onPress={() => update({ layout: 'full' })} style={[s.smallBtn, { minHeight: 40 }]} accessibilityRole="button" accessibilityLabel="Pokaż zdjęcie na całym ekranie">
+              <Text style={s.smallBtnText}>Duży obraz</Text>
+            </Pressable>
             {reading.note ? <Chip s={s} text={reading.note} color={t.warn} /> : null}
           </View>
           {hasTranslation && (
@@ -563,6 +577,26 @@ function Main() {
         </View>
       )}
 
+      {mode !== 'comic' && reading && reading.segments.length > 0 && settings.layout === 'full' && !busy && (
+        <FullReader
+          s={s}
+          t={t}
+          photoUri={reading.photoUri}
+          imgW={reading.imgW}
+          imgH={reading.imgH}
+          segments={reading.segments}
+          current={cursor?.seg ?? null}
+          wordBox={wordBoxOf(reading)}
+          tokens={curSeg ? panelTokens : []}
+          token={curSeg ? cursor?.token ?? null : null}
+          playing={cursor !== null}
+          onTap={(i) => speakFrom(reading, i, view, speakLang, effRate, effVoice)}
+          onPlayStop={() => (cursor !== null ? stopSpeaking() : speakFrom(reading, 0, view, speakLang, effRate, effVoice))}
+          onSplit={() => update({ layout: 'split' })}
+          onNew={newPhoto}
+          onErase={openEraser}
+        />
+      )}
       <Eraser t={t} image={erasing} onDone={afterErase} onCancel={() => setErasing(null)} />
 
       {/* ---------- settings ---------- */}
@@ -577,8 +611,14 @@ function Main() {
               <Option s={s} label="Claude (dokładne)" on={settings.engine === 'claude'} onPress={() => update({ engine: 'claude' })} />
             </View>
             <Text style={s.hintSmall}>
-              Claude poprawia polskie litery i tłumaczy lepiej. Płatne z Twojego konta API Anthropic: {CLAUDE_MODEL}, ${PRICE_IN} za 1 mln tokenów wejścia i ${PRICE_OUT} za 1 mln tokenów wyjścia.
+              Claude poprawia polskie litery i tłumaczy lepiej. Płatne z Twojego konta API Anthropic: {modelOf(settings.model).label.split(' (')[0]}, ${modelOf(settings.model).in} za 1 mln tokenów wejścia i ${modelOf(settings.model).out} za 1 mln tokenów wyjścia.
             </Text>
+            <Text style={s.label}>Model Claude</Text>
+            <View style={s.grid}>
+              {MODELS.map((m) => (
+                <Option key={m.id} s={s} label={m.label} on={settings.model === m.id} onPress={() => update({ model: m.id })} />
+              ))}
+            </View>
             {(settings.engine === 'claude' || mode === 'senior' || !apiKey) && (
               <>
                 <Text style={s.label}>Klucz API Claude</Text>
@@ -651,6 +691,12 @@ function Main() {
                 />
               ))}
             </View>
+            <Text style={s.label}>Widok podczas czytania</Text>
+            <View style={s.grid}>
+              <Option s={s} label="Duży obraz" on={settings.layout === 'full'} onPress={() => update({ layout: 'full' })} />
+              <Option s={s} label="Obraz i tekst" on={settings.layout === 'split'} onPress={() => update({ layout: 'split' })} />
+            </View>
+            <Text style={s.hintSmall}>„Duży obraz”: zdjęcie na cały ekran, widok przesuwa się za czytanym fragmentem i linijką.</Text>
             <View style={s.switchRow}>
               <Text style={[s.label, { flex: 1 }]}>Czytaj od razu po zdjęciu</Text>
               <Switch value={settings.autoRead} onValueChange={(v) => update({ autoRead: v })} />
