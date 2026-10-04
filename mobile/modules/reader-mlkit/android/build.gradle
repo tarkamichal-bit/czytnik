@@ -1,0 +1,25 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.readermlkit'
+version = '0.1.0'
+
+android {
+  namespace "expo.modules.readermlkit"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+dependencies {
+  // Google ML Kit, on-device (https://developers.google.com/ml-kit/release-notes)
+  implementation 'com.google.mlkit:text-recognition:16.0.1'
+  implementation 'com.google.mlkit:language-id:17.0.6'
+  implementation 'com.google.mlkit:translate:17.0.3'
+}

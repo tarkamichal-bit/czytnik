@@ -1,0 +1,38 @@
+{
+  "expo": {
+    "name": "Czytnik",
+    "slug": "czytnik",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#14213d"
+    },
+    "android": {
+      "package": "pl.tarkamichal.czytnik",
+      "versionCode": 1,
+      "adaptiveIcon": {
+        "backgroundColor": "#14213d",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": ["android.permission.CAMERA"],
+      "blockedPermissions": ["android.permission.RECORD_AUDIO"],
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "expo-font",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Aparat jest potrzebny, żeby odczytać tekst ze zdjęcia.",
+          "recordAudioAndroid": false
+        }
+      ]
+    ]
+  }
+}
