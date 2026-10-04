@@ -25,6 +25,8 @@ object PanelCutter {
     if (w < 8 || h < 8) return listOf(intArrayOf(0, 0, w, h))
     val light0 = lightMap(lum, w, h)
     val bubble0 = bubbleMask(light0, w, h, texts)
+    // panels drawn with a border: each border is one closed dark outline, whatever the perspective
+    framed(light0, bubble0, w, h)?.let { return it }
     val angle = skew(light0, w, h)
     val light = if (angle == 0.0) light0 else rotate(light0, w, h, angle)
     val bubble = if (angle == 0.0) bubble0 else rotate(bubble0, w, h, angle, outside = false)
@@ -51,6 +53,93 @@ object PanelCutter {
     val kept = out.filter { (it[2] - it[0]).toLong() * (it[3] - it[1]) >= pageArea * 0.02 }
     val boxes = if (kept.isEmpty()) listOf(all) else kept
     return if (angle == 0.0) boxes else boxes.map { unrotate(it, w, h, angle) }
+  }
+
+  /** Panels with a drawn border. Every border is a closed dark outline, so a panel is the bounding box of
+   *  one connected patch of ink that runs along all four sides of that box. Bubbles are left out first
+   *  (a bubble drawn across a gutter would join two panels); patches touching the photo's edge (a hand,
+   *  the table, the neighbouring page) do not count. null when the page does not look framed. */
+  internal fun framed(light: BooleanArray, bubble: BooleanArray, w: Int, h: Int): List<IntArray>? {
+    // ink, with 1-px gaps in thin borders closed
+    val ink = BooleanArray(w * h)
+    for (y in 0 until h) for (x in 0 until w) {
+      val i = y * w + x
+      if (light[i] || bubble[i]) continue
+      for (dy in -1..1) for (dx in -1..1) {
+        val xx = x + dx; val yy = y + dy
+        if (xx in 0 until w && yy in 0 until h && !bubble[yy * w + xx]) ink[yy * w + xx] = true
+      }
+    }
+    val comp = IntArray(w * h) { -1 }
+    val stack = IntArray(w * h)
+    val boxes = mutableListOf<IntArray>()
+    val edge = max(2, max(w, h) / 200)
+    var id = 0
+    for (start in 0 until w * h) {
+      if (!ink[start] || comp[start] >= 0) continue
+      var sp = 0; stack[sp++] = start; comp[start] = id
+      var x0 = w; var y0 = h; var x1 = -1; var y1 = -1
+      while (sp > 0) {
+        val i = stack[--sp]
+        val x = i % w; val y = i / w
+        if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y
+        if (x > 0 && ink[i - 1] && comp[i - 1] < 0) { comp[i - 1] = id; stack[sp++] = i - 1 }
+        if (x < w - 1 && ink[i + 1] && comp[i + 1] < 0) { comp[i + 1] = id; stack[sp++] = i + 1 }
+        if (y > 0 && ink[i - w] && comp[i - w] < 0) { comp[i - w] = id; stack[sp++] = i - w }
+        if (y < h - 1 && ink[i + w] && comp[i + w] < 0) { comp[i + w] = id; stack[sp++] = i + w }
+      }
+      val bw = x1 - x0 + 1; val bh = y1 - y0 + 1
+      val touches = x0 < edge || y0 < edge || x1 >= w - edge || y1 >= h - edge
+      if (!touches && bw >= w * 0.08 && bh >= h * 0.05 && bordered(comp, bubble, id, w, x0, y0, x1, y1)) boxes.add(intArrayOf(x0, y0, x1 + 1, y1 + 1))
+      id++
+    }
+    // something drawn inside a panel (not touching its border) is not a panel of its own
+    val kept = boxes.filter { b -> boxes.none { o -> o !== b && inside(b, o) } }
+    if (kept.size < 2) return null
+    val photo = w.toLong() * h
+    if (kept.sumOf { (it[2] - it[0]).toLong() * (it[3] - it[1]) } < photo * 0.2) return null
+    return readingOrder(kept)
+  }
+
+  /** Does the patch run along each side of its box? (A border does; a blob of artwork does not.)
+   *  A bubble drawn over the border hides it there, so a bubble counts as border too. */
+  private fun bordered(comp: IntArray, bubble: BooleanArray, id: Int, w: Int, x0: Int, y0: Int, x1: Int, y1: Int): Boolean {
+    val bw = x1 - x0 + 1; val bh = y1 - y0 + 1
+    // a slanted border (perspective) is not exactly on the box edge: look a little way in
+    // (up to ~5 degrees: a long side drifts by 9% of its length)
+    val dx = max(3, max(bw * 0.06, bh * 0.09).toInt()); val dy = max(3, max(bh * 0.06, bw * 0.09).toInt())
+    fun side(horizontal: Boolean, from: Int, to: Int, step: Int): Double {
+      var hit = 0; var n = 0
+      if (horizontal) for (x in x0..x1) { n++; var y = from; while (if (step > 0) y <= to else y >= to) { if (comp[y * w + x] == id || bubble[y * w + x]) { hit++; break }; y += step } }
+      else for (y in y0..y1) { n++; var x = from; while (if (step > 0) x <= to else x >= to) { if (comp[y * w + x] == id || bubble[y * w + x]) { hit++; break }; x += step } }
+      return hit.toDouble() / n
+    }
+    val top = side(true, y0, min(y1, y0 + dy), 1)
+    val bottom = side(true, y1, max(y0, y1 - dy), -1)
+    val left = side(false, x0, min(x1, x0 + dx), 1)
+    val right = side(false, x1, max(x0, x1 - dx), -1)
+    return top >= 0.75 && bottom >= 0.75 && left >= 0.75 && right >= 0.75
+  }
+
+  private fun inside(a: IntArray, b: IntArray): Boolean {
+    val iw = min(a[2], b[2]) - max(a[0], b[0]); val ih = min(a[3], b[3]) - max(a[1], b[1])
+    if (iw <= 0 || ih <= 0) return false
+    val aa = (a[2] - a[0]).toLong() * (a[3] - a[1]); val ba = (b[2] - b[0]).toLong() * (b[3] - b[1])
+    return aa < ba && iw.toLong() * ih >= aa * 0.85
+  }
+
+  /** Rows of panels top to bottom (panels overlapping by half their height share a row), left to right. */
+  private fun readingOrder(boxes: List<IntArray>): List<IntArray> {
+    val rows = mutableListOf<MutableList<IntArray>>()
+    for (b in boxes.sortedBy { it[1] }) {
+      val row = rows.lastOrNull()
+      val fits = row != null && row.any { o ->
+        val ov = min(o[3], b[3]) - max(o[1], b[1])
+        ov >= min(o[3] - o[1], b[3] - b[1]) * 0.5
+      }
+      if (fits) row!!.add(b) else rows.add(mutableListOf(b))
+    }
+    return rows.flatMap { r -> r.sortedBy { it[0] } }
   }
 
   /** The speech bubbles around recognised texts: the light area around the text is flood-filled; when it stays

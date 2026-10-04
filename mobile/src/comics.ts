@@ -8,7 +8,7 @@ export type Bubble = { text: string; translation: string; box: Box; words: OcrWo
 export type Scene = { box: Box; bubbles: Bubble[] };
 export type PageAnalysis = { version?: number; target: string; engine: Engine; lang: string; scenes: Scene[]; note?: string };
 /** Bump when the analysis changes, so pages read by an older version are analysed again. */
-export const ANALYSIS_VERSION = 6;
+export const ANALYSIS_VERSION = 7;
 export type ComicPage = SavedPage & { analysis?: PageAnalysis };
 export type Comic = { id: string; title: string; createdAt: number; pages: ComicPage[] };
 
@@ -199,7 +199,10 @@ export async function analyzePage(original: SavedPage, o: Analyze): Promise<{ an
       groups[k].push(b);
     }
     scenes = cp.map((box, k) => {
-      const same = panels.find((p) => overlap(p, box) > 0.6);
+      // the drawn border of the same panel, if found on the photo (Claude's box is only approximate)
+      let same: Box | undefined;
+      let best = 0.3;
+      for (const p of panels) { const o = overlap(p, box); if (o > best) { best = o; same = p; } }
       return { box: same ?? box, bubbles: byRank(groups[k]) };
     });
   } else if (panels.length > 1) {

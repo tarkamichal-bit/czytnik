@@ -161,7 +161,8 @@ class ReaderMlkitModule : Module() {
     AsyncFunction("detectPanels") { uri: String, texts: List<Double> ->
       val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
       val src = upright(context, Uri.parse(uri))
-      val k = min(1.0, 700.0 / max(src.width, src.height))
+      // fine enough that thin panel borders stay unbroken
+      val k = min(1.0, 900.0 / max(src.width, src.height))
       val w = max(1, (src.width * k).roundToInt())
       val h = max(1, (src.height * k).roundToInt())
       val small = Bitmap.createScaledBitmap(src, w, h, true)
