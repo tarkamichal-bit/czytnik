@@ -43,7 +43,7 @@ export async function readWithClaude(
     `(poprawne znaki diakrytyczne, np. ą ć ę ł ń ó ś ź ż; słowa przeniesione do następnej linii połączone). ` +
     `Zwróć w "blocks" dokładnie ${ocrBlocks.length || 'tyle, ile jest akapitów lub dymków na zdjęciu'} ` +
     `${ocrBlocks.length ? 'elementów, w tej samej kolejności co lista powyżej' : 'elementów, w kolejności czytania'}. ` +
-    `Fragment będący szumem (pojedyncze znaki z tła, kod kreskowy) zwróć jako pusty tekst. ` +
+    `Fragment będący szumem (pojedyncze znaki z tła, kod kreskowy), numer strony albo pagina (powtarzany tytuł w nagłówku lub stopce) zwróć jako pusty tekst. ` +
     `W "lang" podaj kod ISO 639-1 głównego języka tekstu. ` +
     `Jeśli ten język jest inny niż "${target}" (${targetName}), w "translation" każdego fragmentu podaj naturalne tłumaczenie ` +
     `na ${targetName} do odczytania przez lektora; jeśli jest taki sam, "translation" ma być identyczne z "text".` +
@@ -72,15 +72,96 @@ export async function readWithClaude(
     ],
   });
 
-  const u = msg.usage;
-  const inputTokens = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
-  const outputTokens = u.output_tokens ?? 0;
+  const { inputTokens, outputTokens } = tokensOf(msg.usage);
   if (msg.stop_reason === 'refusal') throw new ClaudeRefusal('refusal');
   const out = msg.parsed_output;
   if (!out) throw new Error('no parsed output');
   return {
     lang: out.lang.trim().toLowerCase().slice(0, 2),
     blocks: out.blocks.map((b) => ({ text: b.text.trim(), translation: b.translation.trim() })),
+    inputTokens,
+    outputTokens,
+    costUsd: costOf(inputTokens, outputTokens),
+  };
+}
+
+type UsageLike = { input_tokens?: number | null; output_tokens?: number | null; cache_creation_input_tokens?: number | null; cache_read_input_tokens?: number | null };
+function tokensOf(u: UsageLike) {
+  const inputTokens = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+  return { inputTokens, outputTokens: u.output_tokens ?? 0 };
+}
+
+// ---------- comics ----------
+const KINDS = ['dialog', 'narration', 'sound', 'page_number', 'other'] as const;
+export type ComicKind = (typeof KINDS)[number];
+
+const ComicSchema = z.object({
+  lang: z.string(),
+  blocks: z.array(z.object({ text: z.string(), translation: z.string(), kind: z.enum(KINDS) })),
+  order: z.array(z.number().int()),
+});
+
+export type ClaudeComic = {
+  lang: string;
+  blocks: { text: string; translation: string; kind: ComicKind }[];
+  /** Indices of the blocks to read, in reading order (page numbers and other non-story text left out). */
+  order: number[];
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+};
+
+/** Comic page: fixes the OCR text of every bubble, says what each block is (so page numbers and
+ *  publisher notes are skipped) and gives the order in which a reader goes through the bubbles. */
+export async function readComicWithClaude(
+  apiKey: string,
+  jpegBase64: string,
+  ocrBlocks: { text: string; x: number; y: number }[],
+  target: string,
+  targetName: string,
+): Promise<ClaudeComic> {
+  const client = new Anthropic({ apiKey, maxRetries: 1, timeout: 180_000 });
+  const list = ocrBlocks.map((b, i) => `[${i}] (x=${b.x}, y=${b.y}) ${b.text}`).join('\n');
+  const prompt =
+    `Zdjęcie przedstawia stronę komiksu. Automatyczne rozpoznawanie znalazło na niej fragmenty tekstu ` +
+    `(x, y to środek fragmentu na zdjęciu w skali 0–1000), ale myli znaki, zwłaszcza polskie litery:\n${list}\n\n` +
+    `Zwróć w "blocks" dokładnie ${ocrBlocks.length} elementów, w tej samej kolejności co lista powyżej. Dla każdego:\n` +
+    `- "text": tekst poprawiony tak, aby dokładnie odpowiadał temu, co jest na zdjęciu (polskie znaki, słowa przeniesione do następnej linii połączone);\n` +
+    `- "kind": "dialog" (dymek z wypowiedzią lub myślą), "narration" (ramka narratora), "sound" (onomatopeja, np. BUM), ` +
+    `"page_number" (numer strony) albo "other" (tytuł serii w stopce, nazwa wydawnictwa, prawa autorskie, szum z tła);\n` +
+    `- "translation": jeśli tekst jest w innym języku niż "${target}" (${targetName}), naturalne tłumaczenie na ${targetName} do odczytania przez lektora dziecku; ` +
+    `w przeciwnym razie to samo co "text".\n` +
+    `W "order" podaj numery fragmentów do przeczytania w kolejności, w jakiej czyta się ten komiks: kadr po kadrze, ` +
+    `a w kadrze dymki w kolejności rozmowy. Pomiń "page_number" i "other". ` +
+    `W "lang" podaj kod ISO 639-1 języka komiksu.`;
+
+  const msg = await client.beta.messages.parse({
+    model: CLAUDE_MODEL,
+    max_tokens: 12000,
+    betas: ['server-side-fallback-2026-07-01'],
+    fallbacks: 'default',
+    output_config: { effort: 'medium', format: betaZodOutputFormat(ComicSchema) },
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: jpegBase64 } },
+          { type: 'text', text: prompt },
+        ],
+      },
+    ],
+  });
+
+  const { inputTokens, outputTokens } = tokensOf(msg.usage);
+  if (msg.stop_reason === 'refusal') throw new ClaudeRefusal('refusal');
+  const out = msg.parsed_output;
+  if (!out) throw new Error('no parsed output');
+  const seen = new Set<number>();
+  const order = out.order.filter((i) => i >= 0 && i < out.blocks.length && !seen.has(i) && (seen.add(i), true));
+  return {
+    lang: out.lang.trim().toLowerCase().slice(0, 2),
+    blocks: out.blocks.map((b) => ({ text: b.text.trim(), translation: b.translation.trim(), kind: b.kind })),
+    order,
     inputTokens,
     outputTokens,
     costUsd: costOf(inputTokens, outputTokens),

@@ -20,6 +20,8 @@ declare class ReaderMlkitModule extends NativeModule<{}> {
   savePage(srcUri: string, comicId: string, name: string): Promise<SavedPage>;
   /** Deletes all stored pages of a comic. */
   deleteComic(comicId: string): Promise<boolean>;
+  /** Paints white over strokes (x,y pairs in image pixels; counts = points per stroke). Returns the new image. */
+  erase(uri: string, points: number[], counts: number[], brush: number): Promise<SavedPage>;
   /** Comic panels in reading order (image pixels). */
   detectPanels(uri: string): Promise<Box[]>;
 }

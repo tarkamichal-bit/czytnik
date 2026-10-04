@@ -2,8 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Image, LayoutChangeEvent, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { CameraView } from 'expo-camera';
 import * as Speech from 'expo-speech';
-import Reader, { Box } from '../modules/reader-mlkit/src/ReaderMlkitModule';
-import { Comic, PageAnalysis, analyzePage, loadComics, saveComics } from './comics';
+import Reader, { Box, SavedPage } from '../modules/reader-mlkit/src/ReaderMlkitModule';
+import Eraser from './Eraser';
+import { ANALYSIS_VERSION, Comic, PageAnalysis, analyzePage, loadComics, saveComics } from './comics';
 import { FONT, FONT_BOLD, Settings, Theme, langName, tokenAt, tokenize, voiceOf, voiceTag } from './shared';
 import { BigButton, BusyOverlay, Chip, S } from './ui';
 
@@ -63,6 +64,27 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
     try { await Reader.deleteComic(id); } catch {}
     persist(comics.filter((x) => x.id !== id));
   };
+
+  // ---------- eraser ----------
+  const [erasing, setErasing] = useState<{ comicId: string; page: number; img: SavedPage } | null>(null);
+  const editPage = (comicId: string, idx: number) => {
+    const p = comics.find((x) => x.id === comicId)?.pages[idx];
+    if (!p) return;
+    stop();
+    setErasing({ comicId, page: idx, img: { uri: p.uri, width: p.width, height: p.height } });
+  };
+  const afterErase = (img: SavedPage) => {
+    if (!erasing) return;
+    const { comicId, page: idx } = erasing;
+    setErasing(null);
+    // the edited photo replaces the page; its old analysis no longer matches
+    setComics((prev) => {
+      const next = prev.map((x) => (x.id === comicId ? { ...x, pages: x.pages.map((p, i) => (i === idx ? { ...img } : p)) } : x));
+      saveComics(next);
+      return next;
+    });
+  };
+  const eraser = <Eraser t={t} image={erasing?.img ?? null} onDone={afterErase} onCancel={() => setErasing(null)} />;
 
   // ---------- capture ----------
   const shoot = async () => {
@@ -174,7 +196,7 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
       zoom.setValue(1); tx.setValue(0); ty.setValue(0);
       const wantClaude = settings.engine === 'claude' && !!apiKey;
       let a = page.analysis;
-      const usable = a && a.target === settings.target && (a.engine === 'claude' || !wantClaude);
+      const usable = a && a.version === ANALYSIS_VERSION && a.target === settings.target && (a.engine === 'claude' || !wantClaude);
       if (!usable) {
         try {
           a = await analyzePage(page, { engine: settings.engine, apiKey, target: settings.target, onBusy: setBusy, addUsage });
@@ -202,7 +224,7 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
     return () => { cancelled = true; };
     // run when the page (or the viewer size) changes, not on every analysis save
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screen.kind === 'read' ? `${screen.comicId}:${screen.page}` : '', size.w > 0]);
+  }, [screen.kind === 'read' ? `${screen.comicId}:${screen.page}:${page?.uri ?? ''}` : '', size.w > 0]);
 
   const onLayout = (e: LayoutChangeEvent) => setSize({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height });
 
@@ -248,14 +270,19 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
     const n = comic?.pages.length ?? 0;
     return (
       <View style={{ flex: 1 }}>
+        {eraser}
         <View style={s.lens}>
           <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" autofocus="on" enableTorch={torch} onCameraReady={() => setCameraReady(true)} />
           <View pointerEvents="none" style={c.pageGuide} />
           {busy && <BusyOverlay s={s} text={busy} t={t} />}
         </View>
         <ScrollView horizontal style={c.strip} contentContainerStyle={c.stripInner}>
-          {comic?.pages.map((p, i) => <Image key={p.uri} source={{ uri: p.uri }} style={[c.mini, i >= screen.firstNew && c.miniNew]} />)}
-          <Text style={c.stripText}>{n ? `Stron: ${n}` : 'Zmieść całą stronę w kadrze.'}</Text>
+          {comic?.pages.map((p, i) => (
+            <Pressable key={p.uri} onPress={() => editPage(comic.id, i)} accessibilityRole="button" accessibilityLabel={`Gumka na stronie ${i + 1}`}>
+              <Image source={{ uri: p.uri }} style={[c.mini, i >= screen.firstNew && c.miniNew]} />
+            </Pressable>
+          ))}
+          <Text style={c.stripText}>{n ? `Stron: ${n}. Dotknij strony, aby użyć gumki.` : 'Zmieść całą stronę w kadrze.'}</Text>
         </ScrollView>
         <View style={[s.bar, { paddingBottom: bottomInset }]}>
           <Pressable style={[s.big, s.secondary]} onPress={() => setScreen({ kind: 'list' })} accessibilityRole="button">
@@ -297,6 +324,7 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
 
   return (
     <View style={{ flex: 1 }}>
+      {eraser}
       <View style={[s.lens, c.viewer]} onLayout={onLayout}>
         {page && size.w > 0 && (
           <Animated.View
@@ -326,6 +354,11 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
 
       <View style={c.info}>
         <Chip s={s} text={`Strona ${pageIdx + 1}/${pages}`} color={t.muted} />
+        {comic && (
+          <Pressable onPress={() => editPage(comic.id, pageIdx)} style={c.switch} accessibilityRole="button" accessibilityLabel="Gumka: zamaż część strony, której nie trzeba czytać">
+            <Text style={c.switchText}>Gumka</Text>
+          </Pressable>
+        )}
         {totalScenes > 0 && <Chip s={s} text={`Kadr ${(cursor?.scene ?? 0) + 1}/${totalScenes}`} color={t.muted} />}
         {analysis && analysis.lang !== settings.target && <Chip s={s} text={`${langName(analysis.lang)} → ${langName(settings.target)}`} color={t.ok} />}
         {translated && (

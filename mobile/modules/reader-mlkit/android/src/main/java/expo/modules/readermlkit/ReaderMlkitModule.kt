@@ -2,7 +2,11 @@ package expo.modules.readermlkit
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
+import android.graphics.Paint
+import android.graphics.Path
 import android.media.ExifInterface
 import android.net.Uri
 import android.util.Base64
@@ -78,6 +82,44 @@ class ReaderMlkitModule : Module() {
     AsyncFunction("deleteComic") { comicId: String ->
       val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
       File(context.filesDir, "comics/" + comicId.filter { it.isLetterOrDigit() || it == '-' }).deleteRecursively()
+    }
+
+    // Paints white over finger strokes (the "eraser"), so OCR and Claude ignore that part of the photo.
+    // points = x,y pairs in image pixels for all strokes in a row; counts = points per stroke.
+    // The result is a new file next to the source; a source inside the app's own storage is replaced.
+    AsyncFunction("erase") { uri: String, points: List<Double>, counts: List<Int>, brush: Double ->
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      val srcPath = Uri.parse(uri).path ?: throw IllegalArgumentException("Not a file: $uri")
+      val src = File(srcPath)
+      val bmp = BitmapFactory.decodeFile(srcPath, BitmapFactory.Options().apply { inMutable = true })
+        ?: throw IllegalArgumentException("Cannot decode image")
+      val canvas = Canvas(bmp)
+      val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
+        style = Paint.Style.STROKE
+        strokeWidth = brush.toFloat()
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+      }
+      val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; style = Paint.Style.FILL }
+      var i = 0
+      for (n in counts) {
+        if (n <= 0 || (i + n) * 2 > points.size) break
+        if (n == 1) {
+          canvas.drawCircle(points[i * 2].toFloat(), points[i * 2 + 1].toFloat(), brush.toFloat() / 2, dot)
+        } else {
+          val path = Path()
+          path.moveTo(points[i * 2].toFloat(), points[i * 2 + 1].toFloat())
+          for (j in 1 until n) path.lineTo(points[(i + j) * 2].toFloat(), points[(i + j) * 2 + 1].toFloat())
+          canvas.drawPath(path, paint)
+        }
+        i += n
+      }
+      val dir = src.parentFile ?: context.cacheDir
+      val out = File(dir, src.nameWithoutExtension.substringBefore("-e") + "-e" + System.currentTimeMillis().toString(36) + ".jpg")
+      FileOutputStream(out).use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+      if (src.absolutePath.startsWith(context.filesDir.absolutePath)) src.delete()
+      return@AsyncFunction mapOf("uri" to Uri.fromFile(out).toString(), "width" to bmp.width, "height" to bmp.height)
     }
 
     // Comic panels in reading order, as boxes in image pixels (see PanelCutter).

@@ -31,13 +31,14 @@ export const FONT_BOLD = 'AtkinsonHyperlegible_700Bold';
 
 // ---------- settings ----------
 export type Engine = 'phone' | 'claude';
-export type VoiceStyle = 'normal' | 'elf' | 'giant';
+export type VoiceStyle = 'normal' | 'teller' | 'elf' | 'giant';
 export type Settings = { target: string; rate: number; autoRead: boolean; contrast: boolean; size: number; engine: Engine; voice: VoiceStyle; comicVoice: VoiceStyle };
 export const DEFAULTS: Settings = { target: 'pl', rate: 0.9, autoRead: true, contrast: false, size: 28, engine: 'phone', voice: 'normal', comicVoice: 'elf' };
 // Fairy-tale voices are the system voice with a changed pitch (Android: 0.5-2.0) and tempo
 export const VOICES: { v: VoiceStyle; label: string; pitch: number; rateMul: number }[] = [
   { v: 'normal', label: 'Zwykły', pitch: 1.0, rateMul: 1.0 },
-  { v: 'elf', label: 'Skrzat (bajkowy)', pitch: 1.9, rateMul: 1.08 },
+  { v: 'teller', label: 'Bajarz (ciepły)', pitch: 1.15, rateMul: 0.95 },
+  { v: 'elf', label: 'Skrzat (bajkowy)', pitch: 1.4, rateMul: 1.04 },
   { v: 'giant', label: 'Olbrzym', pitch: 0.55, rateMul: 0.9 },
 ];
 export const voiceOf = (v: VoiceStyle) => VOICES.find((x) => x.v === v) ?? VOICES[0];

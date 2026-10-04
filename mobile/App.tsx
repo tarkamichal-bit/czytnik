@@ -24,7 +24,8 @@ import {
   AtkinsonHyperlegible_400Regular,
   AtkinsonHyperlegible_700Bold,
 } from '@expo-google-fonts/atkinson-hyperlegible';
-import Reader, { Box, OcrWord } from './modules/reader-mlkit/src/ReaderMlkitModule';
+import Reader, { Box, CropResult, OcrWord, SavedPage } from './modules/reader-mlkit/src/ReaderMlkitModule';
+import Eraser from './src/Eraser';
 import {
   DEFAULTS, Engine, NO_USAGE, RATES, Settings, VoiceStyle, TARGETS, THEMES, Usage, VOICES, fmtInt, fmtUsd, langName, tokenAt, tokenize, voiceOf, voiceTag,
 } from './src/shared';
@@ -48,8 +49,22 @@ const MODES: { v: Mode; label: string }[] = [
 const FRAME = { left: 0.06, right: 0.94, top: 0.14, bottom: 0.86 };
 const CROP_MARGIN = 0.02;
 
+const SAMPLES: Record<VoiceStyle, string> = {
+  normal: 'Dzień dobry, będę czytać tekst.',
+  teller: 'Dawno, dawno temu, za siedmioma górami…',
+  elf: 'Hej! Poczytamy razem bajkę?',
+  giant: 'Ho ho, jestem wielki olbrzym.',
+};
+
 // One readable fragment: a paragraph or a comic bubble, with its place on the photo when known.
 type Segment = { text: string; translation: string; box?: Box; words: OcrWord[] };
+// a lone number at the very top or bottom of the photo is a page number, not text to read
+const PAGE_NO = /^[\s\-–—.·•|]*(?:(?:str|s|p|page|pag|seite)\.?\s*)?\d{1,4}(?:\s*\/\s*\d{1,4})?[\s\-–—.·•|]*$/i;
+function isPageNumber(g: Segment, imgH: number) {
+  if (!g.box || !PAGE_NO.test(g.text)) return false;
+  const cy = g.box.top + g.box.height / 2;
+  return cy < imgH * 0.12 || cy > imgH * 0.88;
+}
 type Reading = { photoUri: string; imgW: number; imgH: number; lang: string; segments: Segment[]; engine: Engine; note?: string };
 
 
@@ -170,23 +185,15 @@ function Main() {
   useEffect(() => () => { Speech.stop(); }, []);
 
   // ---------- capture & read ----------
-  const readPhoto = useCallback(async () => {
-    if (!cameraRef.current || busy || !lensSize.w) return;
-    stopSpeaking();
-    setError(null);
+  // Reads an image that is already cropped (fresh from the camera, or after the eraser).
+  const readImage = useCallback(async (img: SavedPage, b64: string | null) => {
     const useClaude = (senior || settings.engine === 'claude') && !!apiKey;
     try {
-      setBusy('Robię zdjęcie…');
-      const photo = await cameraRef.current.takePictureAsync({ quality: 1 });
-      if (!photo?.uri) throw new Error('no photo');
       setBusy('Czytam tekst…');
-      const { w, h } = lensSize;
-      const crop = await Reader.cropToFrame(
-        photo.uri, w, h,
-        w * (FRAME.left - CROP_MARGIN), h * (FRAME.top - CROP_MARGIN),
-        w * (FRAME.right + CROP_MARGIN), h * (FRAME.bottom + CROP_MARGIN),
-        useClaude ? 1568 : 0,
-      );
+      const crop = { ...img, base64: b64 };
+      if (useClaude && !crop.base64) {
+        crop.base64 = (await Reader.cropToFrame(img.uri, img.width, img.height, 0, 0, img.width, img.height, 1568)).base64;
+      }
       const ocr = await Reader.recognize(crop.uri);
       const base: Segment[] = ocr.blocks.map((b) => ({ text: b.text, translation: b.text, box: b, words: b.words }));
       let segments: Segment[] = base;
@@ -214,6 +221,7 @@ function Main() {
         }
       }
 
+      if (engine === 'phone') segments = segments.filter((g) => !isPageNumber(g, crop.height));
       if (engine === 'phone' && segments.length) {
         const all = segments.map((g) => g.text).join('\n');
         try { lang = (await Reader.identifyLanguage(all)).split('-')[0]; } catch {}
@@ -246,7 +254,44 @@ function Main() {
     } finally {
       setBusy(null);
     }
-  }, [busy, lensSize, settings, apiKey, senior, effRate, effVoice, speakFrom, stopSpeaking, addUsage]);
+  }, [settings, apiKey, senior, effRate, effVoice, speakFrom, addUsage]);
+
+  const readPhoto = useCallback(async () => {
+    if (!cameraRef.current || busy || !lensSize.w) return;
+    stopSpeaking();
+    setError(null);
+    const useClaude = (senior || settings.engine === 'claude') && !!apiKey;
+    let crop: CropResult;
+    try {
+      setBusy('Robię zdjęcie…');
+      const photo = await cameraRef.current.takePictureAsync({ quality: 1 });
+      if (!photo?.uri) throw new Error('no photo');
+      const { w, h } = lensSize;
+      crop = await Reader.cropToFrame(
+        photo.uri, w, h,
+        w * (FRAME.left - CROP_MARGIN), h * (FRAME.top - CROP_MARGIN),
+        w * (FRAME.right + CROP_MARGIN), h * (FRAME.bottom + CROP_MARGIN),
+        useClaude ? 1568 : 0,
+      );
+    } catch {
+      setBusy(null);
+      setError('Nie udało się zrobić zdjęcia. Spróbuj jeszcze raz.');
+      return;
+    }
+    await readImage(crop, crop.base64);
+  }, [busy, lensSize, settings.engine, apiKey, senior, stopSpeaking, readImage]);
+
+  const [erasing, setErasing] = useState<SavedPage | null>(null);
+  const openEraser = () => {
+    if (!reading) return;
+    stopSpeaking();
+    setErasing({ uri: reading.photoUri, width: reading.imgW, height: reading.imgH });
+  };
+  const afterErase = (img: SavedPage) => {
+    setErasing(null);
+    setError(null);
+    readImage(img, null);
+  };
 
   const newPhoto = () => { stopSpeaking(); setReading(null); setError(null); };
   const onLensLayout = (e: LayoutChangeEvent) => setLensSize({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height });
@@ -452,6 +497,15 @@ function Main() {
           <>
             <BigButton s={s} label="Nowe zdjęcie" onPress={newPhoto} flex />
             <Pressable
+              style={[s.big, s.secondary, { minWidth: 92, paddingHorizontal: 10 }, !!busy && { opacity: 0.4 }]}
+              onPress={openEraser}
+              disabled={!!busy}
+              accessibilityRole="button"
+              accessibilityLabel="Gumka: zamaż część zdjęcia, której nie trzeba czytać"
+            >
+              <Text style={s.bigText}>Gumka</Text>
+            </Pressable>
+            <Pressable
               style={[s.big, s.secondary, cursor !== null && s.pressed]}
               onPress={() => (cursor !== null ? stopSpeaking() : speakFrom(reading, 0, view, speakLang, effRate, effVoice))}
               disabled={!reading.segments.length}
@@ -480,6 +534,8 @@ function Main() {
           )}
         </View>
       )}
+
+      <Eraser t={t} image={erasing} onDone={afterErase} onCancel={() => setErasing(null)} />
 
       {/* ---------- settings ---------- */}
       <Modal visible={showSettings} animationType="slide" transparent onRequestClose={() => setShowSettings(false)}>
@@ -540,9 +596,7 @@ function Main() {
                   onPress={() => {
                     update({ voice: x.v });
                     Speech.stop();
-                    Speech.speak(x.v === 'elf' ? 'Hej! Poczytamy razem bajkę?' : x.v === 'giant' ? 'Ho ho, jestem wielki olbrzym.' : 'Dzień dobry, będę czytać tekst.', {
-                      language: 'pl-PL', rate: settings.rate * x.rateMul, pitch: x.pitch,
-                    });
+                    Speech.speak(SAMPLES[x.v], { language: 'pl-PL', rate: settings.rate * x.rateMul, pitch: x.pitch });
                   }}
                 />
               ))}
@@ -551,7 +605,17 @@ function Main() {
             <Text style={s.label}>Głos w komiksach</Text>
             <View style={s.grid}>
               {VOICES.map((x) => (
-                <Option key={x.v} s={s} label={x.label} on={settings.comicVoice === x.v} onPress={() => update({ comicVoice: x.v })} />
+                <Option
+                  key={x.v}
+                  s={s}
+                  label={x.label}
+                  on={settings.comicVoice === x.v}
+                  onPress={() => {
+                    update({ comicVoice: x.v });
+                    Speech.stop();
+                    Speech.speak(SAMPLES[x.v], { language: 'pl-PL', rate: settings.rate * x.rateMul, pitch: x.pitch });
+                  }}
+                />
               ))}
             </View>
             <View style={s.switchRow}>
