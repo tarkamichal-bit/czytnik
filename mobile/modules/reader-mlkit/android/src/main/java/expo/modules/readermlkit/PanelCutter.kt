@@ -37,6 +37,9 @@ object PanelCutter {
     return if (angle == 0.0) boxes else boxes.map { unrotate(it, w, h, angle) }
   }
 
+  /** Degrees the photo is tilted by; rotating the photo by minus this value makes the panels straight. */
+  fun skewOf(lum: IntArray, w: Int, h: Int): Double = if (w < 8 || h < 8) 0.0 else skew(lightMap(lum, w, h), w, h)
+
   /** Paper = brighter than (local paper level - 40). The local level is the 90th percentile of the
    *  surrounding cells, so a shadow over half of the page does not turn the paper "dark". */
   internal fun lightMap(lum: IntArray, w: Int, h: Int): BooleanArray {

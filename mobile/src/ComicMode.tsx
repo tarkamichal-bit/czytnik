@@ -113,23 +113,29 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
 
   // ---------- reader: camera move ----------
   const base = page && size.w ? Math.min(size.w / page.width, size.h / page.height) : 1;
+  // the panel being read: shown sharp in the middle of the screen, the rest of the page blurred
+  const [spot, setSpot] = useState<Box | null>(null);
+  const [zoomNow, setZoomNow] = useState(1);
   const focus = useCallback(
-    (b: Box) =>
+    (b: Box, scene = true) =>
       new Promise<void>((resolve) => {
         if (!page || !size.w) return resolve();
         const bw = b.width * base, bh = b.height * base;
-        const z = Math.min(4, Math.min(size.w / bw, size.h / bh) * 0.94);
+        const z = Math.min(5, Math.min(size.w / bw, size.h / bh) * (scene ? 0.96 : 1));
         const cx = (b.left + b.width / 2) * base, cy = (b.top + b.height / 2) * base;
+        setSpot(scene ? b : null);
+        setZoomNow(z);
+        const cfg = { duration: 700, easing: Easing.inOut(Easing.cubic), useNativeDriver: true };
         Animated.parallel([
-          Animated.timing(zoom, { toValue: z, duration: 700, easing: Easing.inOut(Easing.cubic), useNativeDriver: true }),
-          Animated.timing(tx, { toValue: shift(size.w / 2 - z * cx, size.w, page.width * base, z), duration: 700, easing: Easing.inOut(Easing.cubic), useNativeDriver: true }),
-          Animated.timing(ty, { toValue: shift(size.h / 2 - z * cy, size.h, page.height * base, z), duration: 700, easing: Easing.inOut(Easing.cubic), useNativeDriver: true }),
+          Animated.timing(zoom, { toValue: z, ...cfg }),
+          Animated.timing(tx, { toValue: shift(size.w / 2 - z * cx, size.w, page.width * base, z, scene), ...cfg }),
+          Animated.timing(ty, { toValue: shift(size.h / 2 - z * cy, size.h, page.height * base, z, scene), ...cfg }),
         ]).start(() => resolve());
       }),
     [page, size, base, zoom, tx, ty],
   );
   const showWholePage = useCallback(() => {
-    if (page) focus({ left: 0, top: 0, width: page.width, height: page.height });
+    if (page) focus({ left: 0, top: 0, width: page.width, height: page.height }, false);
   }, [page, focus]);
 
   // playback runs across renders (e.g. full screen switched on mid-page): always aim with the current size
@@ -219,21 +225,30 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
       let a = page.analysis;
       const usable = a && a.version === ANALYSIS_VERSION && a.target === settings.target && (a.engine === 'claude' || !wantClaude);
       if (!usable) {
+        // the straightened photo replaces the original file, so it is kept even if reading fails or the user leaves
+        let fixed: SavedPage = page;
         try {
-          a = await analyzePage(page, { engine: settings.engine, model: settings.model, apiKey, target: settings.target, onBusy: setBusy, addUsage });
+          const r = await analyzePage(page, {
+            engine: settings.engine, model: settings.model, apiKey, target: settings.target, onBusy: setBusy, addUsage,
+            onPage: (p) => { fixed = p; },
+          });
+          a = r.analysis;
         } catch {
           a = undefined;
+        }
+        const pageIdx = screen.page;
+        const saved = a;
+        const newFile = fixed.uri !== page.uri;
+        if (saved || newFile) {
+          setComics((prev) => {
+            const next = prev.map((x) => (x.id === comic.id ? { ...x, pages: x.pages.map((p, i) => (i === pageIdx ? { ...fixed, analysis: saved } : p)) } : x));
+            saveComics(next);
+            return next;
+          });
         }
         setBusy(null);
         if (cancelled) return;
         if (!a) { setBusy('Nie udało się odczytać tej strony.'); await sleep(1500); setBusy(null); return; }
-        const pageIdx = screen.page;
-        const saved = a;
-        setComics((prev) => {
-          const next = prev.map((x) => (x.id === comic.id ? { ...x, pages: x.pages.map((p, i) => (i === pageIdx ? { ...p, analysis: saved } : p)) } : x));
-          saveComics(next);
-          return next;
-        });
       }
       if (cancelled || !a) return;
       setAnalysis(a);
@@ -368,19 +383,37 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
               transform: [{ translateX: tx }, { translateY: ty }, { scale: zoom }],
             }}
           >
-            <Image source={{ uri: page.uri }} style={StyleSheet.absoluteFill} />
+            <Image source={{ uri: page.uri }} style={StyleSheet.absoluteFill} blurRadius={spot ? 4 : 0} resizeMethod="resize" />
+            {spot && (
+              <>
+                <View pointerEvents="none" style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.18)' }]} />
+                <View pointerEvents="none" style={[c.spot, place(spot)]}>
+                  {/* full-resolution copy, so text stays sharp when zoomed in */}
+                  <Image
+                    source={{ uri: page.uri }}
+                    resizeMethod="scale"
+                    style={{ position: 'absolute', left: -spot.left * base, top: -spot.top * base, width: page.width * base, height: page.height * base }}
+                  />
+                </View>
+              </>
+            )}
             {analysis?.scenes.map((scn, si) =>
               scn.bubbles.map((b, bi) => (
                 <Pressable
                   key={`${si}-${bi}`}
                   onPress={() => analysis && playFrom(analysis, si, bi, view)}
-                  style={[c.bubble, place(b.box, 3), cursor?.scene === si && cursor.bubble === bi && c.bubbleNow]}
+                  style={[c.bubble, place(b.box, 3 / zoomNow), cursor?.scene === si && cursor.bubble === bi && [c.bubbleNow, { borderWidth: 2 / zoomNow }]]}
                   accessibilityRole="button"
                   accessibilityLabel="Czytaj od tego dymka"
                 />
               )),
             )}
-            {wordBox && <View pointerEvents="none" style={[c.word, place(wordBox, 2)]} />}
+            {wordBox && (
+              <View
+                pointerEvents="none"
+                style={[c.word, place(wordBox, 1 / zoomNow), { borderWidth: 1.5 / zoomNow, borderRadius: 3 / zoomNow }]}
+              />
+            )}
           </Animated.View>
         )}
         <OverlayButton
@@ -392,7 +425,6 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
         />
         {immersive && (
           <View style={[c.band, { paddingBottom: insets.bottom + 10 }]}>
-            <Text style={c.bandText} numberOfLines={2}>{caption}</Text>
             <View style={c.bandRow}>
               <Pressable style={c.round} onPress={prevPage} accessibilityRole="button" accessibilityLabel={pageIdx > 0 ? 'Poprzednia strona' : 'Wróć do listy'}>
                 <Icon name={pageIdx > 0 ? 'prev' : 'list'} size={26} color="#fff" />
@@ -467,8 +499,9 @@ function styles(t: Theme) {
     viewer: { flex: 1, backgroundColor: '#0d1424' },
     viewerFull: { flex: 1, backgroundColor: '#000', overflow: 'hidden' },
     bubble: { position: 'absolute', borderRadius: 8 },
-    bubbleNow: { borderWidth: 3, borderColor: '#ffd23f', backgroundColor: 'rgba(255,210,63,0.18)' },
-    word: { position: 'absolute', borderWidth: 2, borderColor: '#e63946', borderRadius: 4, backgroundColor: 'rgba(255,233,138,0.45)' },
+    bubbleNow: { borderColor: '#ffd23f', backgroundColor: 'rgba(255,210,63,0.12)' },
+    word: { position: 'absolute', borderColor: '#e63946', backgroundColor: 'rgba(255,233,138,0.22)' },
+    spot: { position: 'absolute', overflow: 'hidden' },
     info: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 12, paddingTop: 8, alignItems: 'center' },
     switch: { minHeight: 30, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1.5, borderColor: t.ink, justifyContent: 'center', backgroundColor: t.surface },
     switchText: { fontFamily: FONT_BOLD, fontSize: 13, color: t.ink },

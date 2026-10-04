@@ -388,7 +388,7 @@ function Main() {
             />
           ) : null,
         )}
-        {wordBox && <View pointerEvents="none" style={[s.wordBox, place(wordBox, 3)]} />}
+        {wordBox && <View pointerEvents="none" style={[s.wordBox, place(wordBox, 1)]} />}
       </>
     );
   };

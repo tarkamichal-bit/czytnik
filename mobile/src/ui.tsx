@@ -90,7 +90,7 @@ export function makeStyles(t: Theme) {
     frameGuide: { position: 'absolute', borderWidth: 4, borderColor: 'rgba(255,210,63,0.95)', borderRadius: 14 },
     segBox: { position: 'absolute', borderWidth: 2, borderColor: 'rgba(255,210,63,0.75)', borderRadius: 8 },
     segBoxNow: { borderWidth: 3, borderColor: '#ffd23f', backgroundColor: 'rgba(255,210,63,0.22)' },
-    wordBox: { position: 'absolute', borderWidth: 3, borderColor: '#e63946', borderRadius: 6, backgroundColor: 'rgba(255,233,138,0.45)' },
+    wordBox: { position: 'absolute', borderWidth: 1.5, borderColor: '#e63946', borderRadius: 3, backgroundColor: 'rgba(255,233,138,0.22)' },
     hint: { fontFamily: FONT, fontSize: 16, color: t.muted, textAlign: 'center', paddingHorizontal: 16, paddingTop: 8 },
     error: { fontFamily: FONT_BOLD, fontSize: 16, color: t.warn, paddingHorizontal: 16, paddingTop: 6 },
     bar: { flexDirection: 'row', alignItems: 'stretch', gap: 8, paddingHorizontal: 12, paddingTop: 10, marginTop: 6 },

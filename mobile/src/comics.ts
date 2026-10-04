@@ -8,7 +8,7 @@ export type Bubble = { text: string; translation: string; box: Box; words: OcrWo
 export type Scene = { box: Box; bubbles: Bubble[] };
 export type PageAnalysis = { version?: number; target: string; engine: Engine; lang: string; scenes: Scene[]; note?: string };
 /** Bump when the analysis changes, so pages read by an older version are analysed again. */
-export const ANALYSIS_VERSION = 2;
+export const ANALYSIS_VERSION = 3;
 export type ComicPage = SavedPage & { analysis?: PageAnalysis };
 export type Comic = { id: string; title: string; createdAt: number; pages: ComicPage[] };
 
@@ -48,6 +48,8 @@ type Analyze = {
   target: string;
   onBusy: (msg: string) => void;
   addUsage: (inTok: number, outTok: number, cost: number) => void;
+  /** the photo was straightened into a new file (the original app-owned file is gone) */
+  onPage?: (page: SavedPage) => void;
 };
 
 // "12", "- 12 -", "str. 12", "12/48": page numbers and similar lone numbers
@@ -75,7 +77,15 @@ function nearestPanel(panels: Box[], b: Box) {
   return idx;
 }
 
-export async function analyzePage(page: SavedPage, o: Analyze): Promise<PageAnalysis> {
+/** Reads a page; a tilted photo is straightened first, so the returned page may be a new file. */
+export async function analyzePage(original: SavedPage, o: Analyze): Promise<{ analysis: PageAnalysis; page: SavedPage }> {
+  o.onBusy('Prostuję zdjęcie strony…');
+  let page: SavedPage = original;
+  try {
+    const st = await Reader.straighten(original.uri);
+    page = { uri: st.uri, width: st.width, height: st.height };
+    if (st.uri !== original.uri) o.onPage?.(page);
+  } catch {}
   o.onBusy('Szukam kadrów i dymków…');
   const [panels, ocr] = await Promise.all([Reader.detectPanels(page.uri), Reader.recognize(page.uri)]);
   let bubbles: Bubble[] = ocr.blocks.map((b) => ({ text: b.text, translation: b.text, box: b, words: b.words }));
@@ -132,30 +142,16 @@ export async function analyzePage(page: SavedPage, o: Analyze): Promise<PageAnal
 
   let scenes: Scene[];
   if (panels.length > 1) {
-    if (order) {
-      // follow Claude's order; a new scene starts whenever the next bubble lies in another panel
-      const sc: { panel: number; bubbles: Bubble[] }[] = [];
-      for (const i of order) {
-        const b = bubbles[i];
-        if (!b || !b.text.trim()) continue;
-        const p = nearestPanel(panels, b.box);
-        const last = sc[sc.length - 1];
-        if (last && last.panel === p) last.bubbles.push(b);
-        else sc.push({ panel: p, bubbles: [b] });
-      }
-      // panels without text are shown too, after the last scene of an earlier panel
-      panels.forEach((_, p) => {
-        if (sc.some((x) => x.panel === p)) return;
-        let at = 0;
-        sc.forEach((x, k) => { if (x.panel < p) at = k + 1; });
-        sc.splice(at, 0, { panel: p, bubbles: [] });
-      });
-      scenes = sc.map((x) => ({ box: panels[x.panel], bubbles: x.bubbles }));
-    } else {
-      const groups: Bubble[][] = panels.map(() => []);
-      for (const b of bubbles) if (b.text.trim()) groups[nearestPanel(panels, b.box)].push(b);
-      scenes = panels.map((p, i) => ({ box: p, bubbles: readingOrder(groups[i]) }));
-    }
+    // a panel is read completely before the next one (panels in reading order from the cutter);
+    // inside a panel the bubbles follow Claude's order, or top-to-bottom / left-to-right
+    const rank = new Map<Bubble, number>();
+    order?.forEach((i, k) => { if (bubbles[i]) rank.set(bubbles[i], k); });
+    const groups: Bubble[][] = panels.map(() => []);
+    for (const b of bubbles) if (b.text.trim() && (!order || rank.has(b))) groups[nearestPanel(panels, b.box)].push(b);
+    scenes = panels.map((p, i) => ({
+      box: p,
+      bubbles: order ? groups[i].sort((a, b) => (rank.get(a) ?? 0) - (rank.get(b) ?? 0)) : readingOrder(groups[i]),
+    }));
   } else {
     // no panel grid found: one scene per bubble, framed with some surrounding artwork
     const minW = page.width * 0.35;
@@ -171,5 +167,5 @@ export async function analyzePage(page: SavedPage, o: Analyze): Promise<PageAnal
     });
     if (!scenes.length) scenes = [{ box: { left: 0, top: 0, width: page.width, height: page.height }, bubbles: [] }];
   }
-  return { version: ANALYSIS_VERSION, target: o.target, engine, lang, scenes, note };
+  return { analysis: { version: ANALYSIS_VERSION, target: o.target, engine, lang, scenes, note }, page };
 }

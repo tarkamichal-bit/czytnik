@@ -3,7 +3,7 @@ import { Animated, Easing, Image, LayoutChangeEvent, Pressable, StyleSheet, View
 import { Text } from './Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Box, OcrWord } from '../modules/reader-mlkit/src/ReaderMlkitModule';
-import { FONT, FONT_BOLD, Theme, Token, shift } from './shared';
+import { FONT_BOLD, Theme, Token, shift } from './shared';
 import { OverlayButton, S } from './ui';
 import Icon from './Icon';
 
@@ -33,6 +33,7 @@ const MAX_ZOOM = 3.5;
 export default function FullReader(p: Props) {
   const insets = useSafeAreaInsets();
   const [size, setSize] = useState({ w: 0, h: 0 });
+  const [zoomNow, setZoomNow] = useState(1);
   const zoom = useRef(new Animated.Value(1)).current;
   const tx = useRef(new Animated.Value(0)).current;
   const ty = useRef(new Animated.Value(0)).current;
@@ -64,6 +65,7 @@ export default function FullReader(p: Props) {
     }
     const x = shift(size.w / 2 - z * cx, size.w, W, z);
     const y = shift(size.h / 2 - z * cy, size.h, H, z);
+    setZoomNow(z);
     const cfg = { duration: 450, easing: Easing.inOut(Easing.cubic), useNativeDriver: true };
     Animated.parallel([
       Animated.timing(zoom, { toValue: z, ...cfg }),
@@ -86,7 +88,8 @@ export default function FullReader(p: Props) {
               transform: [{ translateX: tx }, { translateY: ty }, { scale: zoom }],
             }}
           >
-            <Image source={{ uri: p.photoUri }} style={StyleSheet.absoluteFill} />
+            {/* full resolution (no downscaled decode), so letters stay sharp when zoomed in */}
+            <Image source={{ uri: p.photoUri }} style={StyleSheet.absoluteFill} resizeMethod="scale" />
             {p.segments.map((g, i) =>
               g.box ? (
                 <Pressable
@@ -94,21 +97,18 @@ export default function FullReader(p: Props) {
                   onPress={() => p.onTap(i)}
                   accessibilityRole="button"
                   accessibilityLabel={`Czytaj od fragmentu ${i + 1}`}
-                  style={[p.s.segBox, place(g.box, 4), p.current === i && p.s.segBoxNow]}
+                  style={[p.s.segBox, place(g.box, 4 / zoomNow), { borderWidth: 1.5 / zoomNow }, p.current === i && [p.s.segBoxNow, { borderWidth: 2 / zoomNow }]]}
                 />
               ) : null,
             )}
-            {p.wordBox && <View pointerEvents="none" style={[p.s.wordBox, place(p.wordBox, 3)]} />}
+            {p.wordBox && (
+              <View pointerEvents="none" style={[p.s.wordBox, place(p.wordBox, 1 / zoomNow), { borderWidth: 1.5 / zoomNow, borderRadius: 3 / zoomNow }]} />
+            )}
           </Animated.View>
         )}
         <OverlayButton s={p.s} icon="shrink" label="Zamknij pełny ekran" onPress={p.onSplit} pos={{ right: 10, top: 10 }} />
       </View>
 
-      <Text style={c.caption} numberOfLines={2}>
-        {p.tokens.map((tk, i) => (
-          <Text key={i} style={p.token === i ? p.s.now : undefined}>{tk.text}{i < p.tokens.length - 1 ? ' ' : ''}</Text>
-        ))}
-      </Text>
 
       <View style={c.bar}>
         <Pressable style={c.btn} onPress={p.onNew} accessibilityRole="button" accessibilityLabel="Nowe zdjęcie">
@@ -132,7 +132,6 @@ function styles(t: Theme) {
   return StyleSheet.create({
     root: { position: 'absolute', left: 0, top: 0, right: 0, bottom: 0, backgroundColor: '#0d1424', paddingHorizontal: 10, gap: 8 },
     viewer: { flex: 1, borderRadius: 14, overflow: 'hidden', backgroundColor: '#000' },
-    caption: { fontFamily: FONT, fontSize: 19, lineHeight: 26, color: '#fff', minHeight: 52, paddingHorizontal: 6 },
     bar: { flexDirection: 'row', gap: 8 },
     btn: { width: 72, minHeight: 60, borderRadius: 16, borderWidth: 1.5, borderColor: 'rgba(207,214,230,0.6)', alignItems: 'center', justifyContent: 'center', gap: 2 },
     btnText: { fontFamily: FONT_BOLD, fontSize: 12, color: '#fff', textAlign: 'center' },

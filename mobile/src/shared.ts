@@ -101,9 +101,10 @@ export function wordClock(tokens: Token[], rate: number, onToken: (i: number) =>
 /**
  * Translation for an image of size `content` (at zoom 1) scaled by z around its centre (the default
  * transform origin), so that its left/top edge lands at `edge`; the edge is first kept inside the
- * viewport so no empty margin shows (a smaller image is centred).
+ * viewport so no empty margin shows (a smaller image is centred). With `free` the edge is used as
+ * given (to put a comic panel exactly in the middle, even at the border of the page).
  */
-export function shift(edge: number, view: number, content: number, z: number) {
-  const e = content * z <= view ? (view - content * z) / 2 : Math.min(0, Math.max(view - content * z, edge));
+export function shift(edge: number, view: number, content: number, z: number, free = false) {
+  const e = free ? edge : content * z <= view ? (view - content * z) / 2 : Math.min(0, Math.max(view - content * z, edge));
   return e - (content / 2) * (1 - z);
 }

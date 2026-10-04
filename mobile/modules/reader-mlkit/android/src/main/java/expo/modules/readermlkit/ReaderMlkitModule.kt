@@ -122,6 +122,40 @@ class ReaderMlkitModule : Module() {
       return@AsyncFunction mapOf("uri" to Uri.fromFile(out).toString(), "width" to bmp.width, "height" to bmp.height)
     }
 
+    // Straightens a tilted page photo: the tilt is the one PanelCutter finds from the gutters
+    // (up to ±4°); the photo is turned back and saved next to the source (an app-owned source is
+    // replaced). angle = 0 means it was already straight and nothing was written.
+    AsyncFunction("straighten") { uri: String ->
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      val srcPath = Uri.parse(uri).path ?: throw IllegalArgumentException("Not a file: $uri")
+      val src = BitmapFactory.decodeFile(srcPath) ?: throw IllegalArgumentException("Cannot decode image")
+      val k = min(1.0, 700.0 / max(src.width, src.height))
+      val w = max(1, (src.width * k).roundToInt())
+      val h = max(1, (src.height * k).roundToInt())
+      val small = Bitmap.createScaledBitmap(src, w, h, true)
+      val px = IntArray(w * h)
+      small.getPixels(px, 0, w, 0, 0, w, h)
+      val lum = IntArray(w * h) { i ->
+        val c = px[i]
+        (((c shr 16) and 0xff) * 299 + ((c shr 8) and 0xff) * 587 + (c and 0xff) * 114) / 1000
+      }
+      val angle = PanelCutter.skewOf(lum, w, h)
+      if (angle == 0.0) {
+        return@AsyncFunction mapOf("uri" to uri, "width" to src.width, "height" to src.height, "angle" to 0.0)
+      }
+      val out = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
+      val canvas = Canvas(out)
+      canvas.drawColor(Color.WHITE)
+      val m = Matrix().apply { setRotate((-angle).toFloat(), src.width / 2f, src.height / 2f) }
+      canvas.drawBitmap(src, m, Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG))
+      val srcFile = File(srcPath)
+      val dir = srcFile.parentFile ?: context.cacheDir
+      val f = File(dir, srcFile.nameWithoutExtension.substringBefore("-") + "-s" + System.currentTimeMillis().toString(36) + ".jpg")
+      FileOutputStream(f).use { out.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+      if (srcFile.absolutePath.startsWith(context.filesDir.absolutePath)) srcFile.delete()
+      return@AsyncFunction mapOf("uri" to Uri.fromFile(f).toString(), "width" to out.width, "height" to out.height, "angle" to angle)
+    }
+
     // Comic panels in reading order, as boxes in image pixels (see PanelCutter).
     AsyncFunction("detectPanels") { uri: String ->
       val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()

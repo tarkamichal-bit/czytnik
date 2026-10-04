@@ -22,6 +22,8 @@ declare class ReaderMlkitModule extends NativeModule<{}> {
   deleteComic(comicId: string): Promise<boolean>;
   /** Paints white over strokes (x,y pairs in image pixels; counts = points per stroke). Returns the new image. */
   erase(uri: string, points: number[], counts: number[], brush: number): Promise<SavedPage>;
+  /** Turns a tilted page photo straight (angle in degrees; 0 = already straight, same uri). */
+  straighten(uri: string): Promise<SavedPage & { angle: number }>;
   /** Comic panels in reading order (image pixels). */
   detectPanels(uri: string): Promise<Box[]>;
 }
