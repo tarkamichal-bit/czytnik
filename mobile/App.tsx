@@ -25,91 +25,33 @@ import {
   AtkinsonHyperlegible_700Bold,
 } from '@expo-google-fonts/atkinson-hyperlegible';
 import Reader, { Box, OcrWord } from './modules/reader-mlkit/src/ReaderMlkitModule';
+import {
+  DEFAULTS, Engine, NO_USAGE, RATES, Settings, VoiceStyle, TARGETS, THEMES, Usage, VOICES, fmtInt, fmtUsd, langName, tokenAt, tokenize, voiceOf, voiceTag,
+} from './src/shared';
+import { BigButton, BusyOverlay, Chip, Option, makeStyles } from './src/ui';
+import ComicMode from './src/ComicMode';
 import Background from './src/Background';
 import { CLAUDE_MODEL, PRICE_IN, PRICE_OUT } from './src/pricing';
 
 // The Anthropic SDK is loaded only when Claude is used, so a problem there can never stop the app from starting.
 const loadClaude = () => require('./src/claude') as typeof import('./src/claude');
 
-// ---------- languages ----------
-const LANGS: Record<string, string> = {
-  pl: 'polski', en: 'angielski', de: 'niemiecki', uk: 'ukraiński', fr: 'francuski', es: 'hiszpański',
-  it: 'włoski', cs: 'czeski', sk: 'słowacki', ru: 'rosyjski', pt: 'portugalski', nl: 'niderlandzki',
-  sv: 'szwedzki', da: 'duński', no: 'norweski', fi: 'fiński', hu: 'węgierski', ro: 'rumuński',
-  lt: 'litewski', lv: 'łotewski', hr: 'chorwacki', tr: 'turecki', el: 'grecki', be: 'białoruski',
-};
-const TARGETS = ['pl', 'en', 'de', 'uk', 'fr', 'es', 'it'];
-const VOICE_TAG: Record<string, string> = {
-  pl: 'pl-PL', en: 'en-US', de: 'de-DE', uk: 'uk-UA', fr: 'fr-FR', es: 'es-ES', it: 'it-IT',
-};
-const langName = (c: string) => LANGS[c] ?? (c || 'nieznany');
-const voiceTag = (c: string) => VOICE_TAG[c] ?? c;
 
-// ---------- theme ----------
-const THEMES = {
-  normal: {
-    bg: '#f5f3ee', surface: 'rgba(255,255,255,0.92)', ink: '#14213d', muted: '#4a5470', line: '#d9d5ca',
-    lens: '#ffd23f', lensInk: '#14213d', hl: '#ffe98a', ok: '#18794e', warn: '#a14a00', bar: 'dark' as const,
-  },
-  contrast: {
-    bg: '#000000', surface: '#000000', ink: '#ffe600', muted: '#fff3a0', line: '#ffe600',
-    lens: '#ffe600', lensInk: '#000000', hl: '#4a4300', ok: '#7dff9b', warn: '#ffb070', bar: 'light' as const,
-  },
-};
-type Theme = (typeof THEMES)[keyof typeof THEMES];
-
-const FONT = 'AtkinsonHyperlegible_400Regular';
-const FONT_BOLD = 'AtkinsonHyperlegible_700Bold';
+type Mode = 'text' | 'comic' | 'senior';
+const MODES: { v: Mode; label: string }[] = [
+  { v: 'text', label: 'Tekst' },
+  { v: 'comic', label: 'Komiks' },
+  { v: 'senior', label: 'Dziad' },
+];
 
 // Yellow frame inside the camera view (fractions of the view). The crop adds a small margin.
 const FRAME = { left: 0.06, right: 0.94, top: 0.14, bottom: 0.86 };
 const CROP_MARGIN = 0.02;
 
-// ---------- settings ----------
-type Engine = 'phone' | 'claude';
-type VoiceStyle = 'normal' | 'elf' | 'giant';
-type Settings = { target: string; rate: number; autoRead: boolean; contrast: boolean; size: number; engine: Engine; voice: VoiceStyle };
-const DEFAULTS: Settings = { target: 'pl', rate: 0.9, autoRead: true, contrast: false, size: 28, engine: 'phone', voice: 'normal' };
-// Fairy-tale voices are the system voice with a changed pitch (Android: 0.5-2.0) and tempo
-const VOICES: { v: VoiceStyle; label: string; pitch: number; rateMul: number }[] = [
-  { v: 'normal', label: 'Zwykły', pitch: 1.0, rateMul: 1.0 },
-  { v: 'elf', label: 'Skrzat (bajkowy)', pitch: 1.9, rateMul: 1.08 },
-  { v: 'giant', label: 'Olbrzym', pitch: 0.55, rateMul: 0.9 },
-];
-const voiceOf = (v: VoiceStyle) => VOICES.find((x) => x.v === v) ?? VOICES[0];
-const RATES = [
-  { v: 0.7, label: 'Wolno' },
-  { v: 0.9, label: 'Spokojnie' },
-  { v: 1.0, label: 'Normalnie' },
-  { v: 1.2, label: 'Szybko' },
-];
-
-type Usage = { lastIn: number; lastOut: number; lastCost: number; totIn: number; totOut: number; totCost: number; count: number };
-const NO_USAGE: Usage = { lastIn: 0, lastOut: 0, lastCost: 0, totIn: 0, totOut: 0, totCost: 0, count: 0 };
-
 // One readable fragment: a paragraph or a comic bubble, with its place on the photo when known.
 type Segment = { text: string; translation: string; box?: Box; words: OcrWord[] };
 type Reading = { photoUri: string; imgW: number; imgH: number; lang: string; segments: Segment[]; engine: Engine; note?: string };
 
-type Token = { text: string; start: number };
-function tokenize(t: string): Token[] {
-  const out: Token[] = [];
-  const re = /\S+/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(t))) out.push({ text: m[0], start: m.index });
-  return out;
-}
-function tokenAt(tokens: Token[], charIndex: number) {
-  let i = 0;
-  while (i + 1 < tokens.length && tokens[i + 1].start <= charIndex) i++;
-  return i;
-}
-function fmtInt(n: number) {
-  return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-}
-function fmtUsd(n: number) {
-  return '$' + (n < 1 ? n.toFixed(4) : n.toFixed(2)).replace('.', ',');
-}
 
 export default function App() {
   return (
@@ -125,6 +67,8 @@ function Main() {
   const [fontsLoaded] = useFonts({ AtkinsonHyperlegible_400Regular, AtkinsonHyperlegible_700Bold });
   const [permission, requestPermission] = useCameraPermissions();
   const [settings, setSettings] = useState<Settings>(DEFAULTS);
+  const [mode, setMode] = useState<Mode>('text');
+  const senior = mode === 'senior';
   const [apiKey, setApiKey] = useState('');
   const [keyDraft, setKeyDraft] = useState('');
   const [usage, setUsage] = useState<Usage>(NO_USAGE);
@@ -140,6 +84,10 @@ function Main() {
   const cameraRef = useRef<CameraView>(null);
   const speakToken = useRef(0);
 
+  // "Dziad" mode: calm normal voice, slower, big letters, careful reading by Claude
+  const effRate = senior ? Math.min(settings.rate, 0.85) : settings.rate;
+  const effVoice: VoiceStyle = senior ? 'normal' : settings.voice;
+  const effSize = senior ? Math.max(settings.size, 36) : settings.size;
   const t = settings.contrast ? THEMES.contrast : THEMES.normal;
   const s = useMemo(() => makeStyles(t), [t]);
 
@@ -226,7 +174,7 @@ function Main() {
     if (!cameraRef.current || busy || !lensSize.w) return;
     stopSpeaking();
     setError(null);
-    const useClaude = settings.engine === 'claude' && !!apiKey;
+    const useClaude = (senior || settings.engine === 'claude') && !!apiKey;
     try {
       setBusy('Robię zdjęcie…');
       const photo = await cameraRef.current.takePictureAsync({ quality: 1 });
@@ -247,11 +195,11 @@ function Main() {
       let note: string | undefined;
 
       if (useClaude && crop.base64) {
-        setBusy('Claude poprawia tekst…');
+        setBusy(senior ? 'Claude uważnie odczytuje tekst…\nTo może potrwać do minuty.' : 'Claude poprawia tekst…');
         let claude: typeof import('./src/claude') | null = null;
         try {
           claude = loadClaude();
-          const c = await claude.readWithClaude(apiKey, crop.base64, base.map((g) => g.text), settings.target, langName(settings.target));
+          const c = await claude.readWithClaude(apiKey, crop.base64, base.map((g) => g.text), settings.target, langName(settings.target), { careful: senior });
           addUsage(c.inputTokens, c.outputTokens, c.costUsd);
           lang = c.lang || settings.target;
           engine = 'claude';
@@ -292,13 +240,13 @@ function Main() {
       const translated = segments.some((g) => g.translation && g.translation !== g.text);
       const v = translated ? 'tr' : 'or';
       setView(v);
-      if (settings.autoRead) speakFrom(r, 0, v, translated ? settings.target : lang, settings.rate, settings.voice);
+      if (settings.autoRead) speakFrom(r, 0, v, translated ? settings.target : lang, effRate, effVoice);
     } catch (e) {
       setError('Nie udało się odczytać zdjęcia. Spróbuj jeszcze raz.');
     } finally {
       setBusy(null);
     }
-  }, [busy, lensSize, settings, apiKey, speakFrom, stopSpeaking, addUsage]);
+  }, [busy, lensSize, settings, apiKey, senior, effRate, effVoice, speakFrom, stopSpeaking, addUsage]);
 
   const newPhoto = () => { stopSpeaking(); setReading(null); setError(null); };
   const onLensLayout = (e: LayoutChangeEvent) => setLensSize({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height });
@@ -348,7 +296,7 @@ function Main() {
           g.box ? (
             <Pressable
               key={i}
-              onPress={() => speakFrom(r, i, view, speakLang, settings.rate, settings.voice)}
+              onPress={() => speakFrom(r, i, view, speakLang, effRate, effVoice)}
               accessibilityRole="button"
               accessibilityLabel={`Czytaj od fragmentu ${i + 1}`}
               style={[s.segBox, place(g.box, 4), cursor?.seg === i && s.segBoxNow]}
@@ -377,6 +325,35 @@ function Main() {
         </Pressable>
       </View>
 
+      {/* modes */}
+      <View style={s.tabs}>
+        {MODES.map((m) => (
+          <Pressable
+            key={m.v}
+            style={[s.tab, mode === m.v && s.tabOn]}
+            onPress={() => { stopSpeaking(); setReading(null); setError(null); setMode(m.v); }}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: mode === m.v }}
+          >
+            <Text style={[s.tabText, mode === m.v && s.tabTextOn]}>{m.label}</Text>
+          </Pressable>
+        ))}
+      </View>
+      {senior && !apiKey && reading === null && (
+        <Text style={s.error}>Do drobnego i nieostrego druku dodaj klucz Claude w Ustawieniach. Bez niego czytam rozpoznawaniem z telefonu.</Text>
+      )}
+
+      {mode === 'comic' ? (
+        <ComicMode
+          s={s}
+          t={t}
+          settings={settings}
+          apiKey={apiKey}
+          addUsage={addUsage}
+          bottomInset={settings.engine === 'claude' ? 6 : insets.bottom + 12}
+        />
+      ) : (
+      <>
       {/* lens: live camera, or the photo being read */}
       <View style={[s.lens, reading ? s.lensReading : null]} onLayout={onLensLayout}>
         {reading ? (
@@ -402,7 +379,7 @@ function Main() {
 
       {reading === null ? (
         <View style={s.fill}>
-          <Text style={s.hint}>Ustaw tekst w żółtej ramce i naciśnij „Czytaj”.</Text>
+          <Text style={s.hint}>{senior ? 'Połóż kartkę płasko, ustaw tekst w żółtej ramce i naciśnij „Czytaj”.' : 'Ustaw tekst w żółtej ramce i naciśnij „Czytaj”.'}</Text>
           {error && <Text style={s.error}>{error}</Text>}
         </View>
       ) : (
@@ -431,7 +408,7 @@ function Main() {
           )}
           <ScrollView style={s.fill} contentContainerStyle={s.readingWrap}>
             {error ? <Text style={s.error}>{error}</Text> : null}
-            <Text style={[s.reading, { fontSize: settings.size, lineHeight: settings.size * 1.45 }]}>
+            <Text style={[s.reading, { fontSize: effSize, lineHeight: effSize * 1.45 }]}>
               {panelTokens.map((tk, i) => (
                 <Text key={i} style={curSeg && cursor?.token === i ? s.now : undefined}>
                   {tk.text}{i < panelTokens.length - 1 ? ' ' : ''}
@@ -476,7 +453,7 @@ function Main() {
             <BigButton s={s} label="Nowe zdjęcie" onPress={newPhoto} flex />
             <Pressable
               style={[s.big, s.secondary, cursor !== null && s.pressed]}
-              onPress={() => (cursor !== null ? stopSpeaking() : speakFrom(reading, 0, view, speakLang, settings.rate, settings.voice))}
+              onPress={() => (cursor !== null ? stopSpeaking() : speakFrom(reading, 0, view, speakLang, effRate, effVoice))}
               disabled={!reading.segments.length}
               accessibilityRole="button"
               accessibilityLabel={cursor !== null ? 'Zatrzymaj czytanie' : 'Czytaj na głos'}
@@ -487,8 +464,11 @@ function Main() {
         )}
       </View>
 
+      </>
+      )}
+
       {/* Claude usage counter */}
-      {settings.engine === 'claude' && (
+      {(settings.engine === 'claude' || (senior && !!apiKey)) && (
         <View style={[s.usage, { paddingBottom: insets.bottom + 8 }]}>
           {apiKey ? (
             <Text style={s.usageText}>
@@ -568,6 +548,12 @@ function Main() {
               ))}
             </View>
             <Text style={s.hintSmall}>Dotknij, aby posłuchać próbki.</Text>
+            <Text style={s.label}>Głos w komiksach</Text>
+            <View style={s.grid}>
+              {VOICES.map((x) => (
+                <Option key={x.v} s={s} label={x.label} on={settings.comicVoice === x.v} onPress={() => update({ comicVoice: x.v })} />
+              ))}
+            </View>
             <View style={s.switchRow}>
               <Text style={[s.label, { flex: 1 }]}>Czytaj od razu po zdjęciu</Text>
               <Switch value={settings.autoRead} onValueChange={(v) => update({ autoRead: v })} />
@@ -584,102 +570,3 @@ function Main() {
   );
 }
 
-// ---------- small components ----------
-type S = ReturnType<typeof makeStyles>;
-
-function BigButton({ s, label, onPress, disabled, flex }: { s: S; label: string; onPress: () => void; disabled?: boolean; flex?: boolean }) {
-  return (
-    <Pressable
-      style={({ pressed }) => [s.big, flex && { flex: 1 }, disabled && { opacity: 0.5 }, pressed && { transform: [{ scale: 0.98 }] }]}
-      onPress={onPress}
-      disabled={disabled}
-      accessibilityRole="button"
-      accessibilityLabel={label}
-    >
-      <Text style={s.bigText}>{label}</Text>
-    </Pressable>
-  );
-}
-
-function Option({ s, label, on, onPress }: { s: S; label: string; on: boolean; onPress: () => void }) {
-  return (
-    <Pressable style={[s.opt, on && s.optOn]} onPress={onPress} accessibilityRole="radio" accessibilityState={{ selected: on }}>
-      <Text style={[s.optText, on && s.optTextOn]}>{label}</Text>
-    </Pressable>
-  );
-}
-
-function Chip({ s, text, color }: { s: S; text: string; color: string }) {
-  return (
-    <View style={[s.chip, { borderColor: color }]}>
-      <Text style={[s.chipText, { color }]}>{text}</Text>
-    </View>
-  );
-}
-
-function BusyOverlay({ s, text, t }: { s: S; text: string; t: Theme }) {
-  return (
-    <View style={s.busy}>
-      <ActivityIndicator size="large" color={t.lens} />
-      <Text style={s.busyText}>{text}</Text>
-    </View>
-  );
-}
-
-// ---------- styles ----------
-function makeStyles(t: Theme) {
-  return StyleSheet.create({
-    fill: { flex: 1 },
-    center: { alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24 },
-    header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 10 },
-    h1: { fontFamily: FONT_BOLD, fontSize: 30, color: t.ink },
-    h2: { fontFamily: FONT_BOLD, fontSize: 26, color: t.ink },
-    body: { fontFamily: FONT, fontSize: 22, color: t.ink },
-    smallBtn: { minHeight: 52, paddingHorizontal: 16, borderRadius: 14, borderWidth: 2, borderColor: t.line, backgroundColor: t.surface, justifyContent: 'center' },
-    smallBtnText: { fontFamily: FONT_BOLD, fontSize: 18, color: t.ink },
-    lens: { flex: 1, marginHorizontal: 16, borderRadius: 20, overflow: 'hidden', borderWidth: 3, borderColor: t.ink, backgroundColor: '#111' },
-    lensReading: { flex: 1.25 },
-    frameGuide: { position: 'absolute', borderWidth: 4, borderColor: 'rgba(255,210,63,0.95)', borderRadius: 14 },
-    segBox: { position: 'absolute', borderWidth: 2, borderColor: 'rgba(255,210,63,0.75)', borderRadius: 8 },
-    segBoxNow: { borderWidth: 3, borderColor: '#ffd23f', backgroundColor: 'rgba(255,210,63,0.22)' },
-    wordBox: { position: 'absolute', borderWidth: 3, borderColor: '#e63946', borderRadius: 6, backgroundColor: 'rgba(255,233,138,0.45)' },
-    hint: { fontFamily: FONT, fontSize: 20, color: t.muted, textAlign: 'center', paddingHorizontal: 16, paddingTop: 12 },
-    error: { fontFamily: FONT_BOLD, fontSize: 20, color: t.warn, paddingHorizontal: 16, paddingTop: 8 },
-    bar: { flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingTop: 12, borderTopWidth: 2, borderTopColor: t.line, marginTop: 8 },
-    big: { minHeight: 76, borderRadius: 20, borderWidth: 3, borderColor: t.ink, backgroundColor: t.lens, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 18 },
-    bigText: { fontFamily: FONT_BOLD, fontSize: 24, color: t.lensInk, textAlign: 'center' },
-    secondary: { backgroundColor: t.surface, minWidth: 110 },
-    pressed: { backgroundColor: t.ink },
-    pressedText: { color: t.bg },
-    busy: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(13,20,36,0.75)', alignItems: 'center', justifyContent: 'center', gap: 16, padding: 20 },
-    busyText: { fontFamily: FONT_BOLD, fontSize: 24, color: '#ffffff', textAlign: 'center' },
-    meta: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, paddingHorizontal: 16, paddingTop: 10, paddingBottom: 8 },
-    chip: { borderWidth: 2, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 4, backgroundColor: t.surface },
-    chipText: { fontFamily: FONT_BOLD, fontSize: 16 },
-    tabs: { flexDirection: 'row', gap: 6, marginHorizontal: 16, padding: 5, borderRadius: 14, borderWidth: 2, borderColor: t.line, backgroundColor: t.surface },
-    tab: { flex: 1, minHeight: 48, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-    tabOn: { backgroundColor: t.ink },
-    tabText: { fontFamily: FONT_BOLD, fontSize: 19, color: t.ink },
-    tabTextOn: { color: t.bg },
-    readingWrap: { paddingHorizontal: 18, paddingVertical: 12, gap: 8 },
-    reading: { fontFamily: FONT, color: t.ink },
-    now: { backgroundColor: t.hl },
-    sizeRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 16, paddingTop: 4 },
-    sizeBtn: { width: 72, height: 52, borderRadius: 14, borderWidth: 2, borderColor: t.line, backgroundColor: t.surface, alignItems: 'center', justifyContent: 'center' },
-    sizeBtnText: { fontFamily: FONT_BOLD, color: t.ink },
-    sizeLabel: { fontFamily: FONT, fontSize: 18, color: t.muted },
-    usage: { paddingHorizontal: 16, paddingTop: 6 },
-    usageText: { fontFamily: FONT, fontSize: 14, color: t.muted, textAlign: 'center', fontVariant: ['tabular-nums'] },
-    backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
-    sheet: { maxHeight: '92%', backgroundColor: t.bg, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, borderWidth: 2, borderColor: t.line },
-    label: { fontFamily: FONT_BOLD, fontSize: 20, color: t.ink },
-    hintSmall: { fontFamily: FONT, fontSize: 16, color: t.muted },
-    grid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-    opt: { minHeight: 52, paddingHorizontal: 16, borderRadius: 12, borderWidth: 2, borderColor: t.line, backgroundColor: t.surface, justifyContent: 'center' },
-    optOn: { backgroundColor: t.ink, borderColor: t.ink },
-    optText: { fontFamily: FONT_BOLD, fontSize: 18, color: t.ink },
-    optTextOn: { color: t.bg },
-    input: { minHeight: 56, borderRadius: 12, borderWidth: 2, borderColor: t.line, backgroundColor: t.surface, paddingHorizontal: 14, fontFamily: FONT, fontSize: 18, color: t.ink },
-    switchRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 52 },
-  });
-}

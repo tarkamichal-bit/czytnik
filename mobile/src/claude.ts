@@ -29,8 +29,9 @@ export async function readWithClaude(
   ocrBlocks: string[],
   target: string,
   targetName: string,
+  opts: { careful?: boolean } = {},
 ): Promise<ClaudeReading> {
-  const client = new Anthropic({ apiKey, maxRetries: 1, timeout: 90_000 });
+  const client = new Anthropic({ apiKey, maxRetries: 1, timeout: 180_000 });
   const ocrList = ocrBlocks.length
     ? ocrBlocks.map((t, i) => `[${i}] ${t}`).join('\n')
     : '(brak – automatyczne rozpoznawanie nic nie znalazło)';
@@ -45,14 +46,21 @@ export async function readWithClaude(
     `Fragment będący szumem (pojedyncze znaki z tła, kod kreskowy) zwróć jako pusty tekst. ` +
     `W "lang" podaj kod ISO 639-1 głównego języka tekstu. ` +
     `Jeśli ten język jest inny niż "${target}" (${targetName}), w "translation" każdego fragmentu podaj naturalne tłumaczenie ` +
-    `na ${targetName} do odczytania przez lektora; jeśli jest taki sam, "translation" ma być identyczne z "text".`;
+    `na ${targetName} do odczytania przez lektora; jeśli jest taki sam, "translation" ma być identyczne z "text".` +
+    (opts.careful
+      ? `\n\nTo zdjęcie zrobiła starsza osoba: tekst bywa bardzo drobny, nieostry lub pod kątem (instrukcja obsługi, ulotka leku, ` +
+        `pismo urzędowe, artykuł z gazety). Przyjrzyj się uważnie i odczytaj niewyraźne słowa z kontekstu zdania i rodzaju dokumentu. ` +
+        `Liczby, dawki, jednostki, daty, nazwy własne i ostrzeżenia przepisz i przetłumacz bezbłędnie, bez skracania i upraszczania. ` +
+        `Tłumacz wiernie, rzeczowym, pełnym językiem. Jeśli fragmentu nie da się odczytać nawet z kontekstu, wstaw w jego miejscu „[nieczytelne]”, ` +
+        `zamiast zgadywać liczby lub dawki.`
+      : '');
 
   const msg = await client.beta.messages.parse({
     model: CLAUDE_MODEL,
-    max_tokens: 8000,
+    max_tokens: opts.careful ? 16000 : 8000,
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
-    output_config: { effort: 'low', format: betaZodOutputFormat(ReadingSchema) },
+    output_config: { effort: opts.careful ? 'high' : 'low', format: betaZodOutputFormat(ReadingSchema) },
     messages: [
       {
         role: 'user',

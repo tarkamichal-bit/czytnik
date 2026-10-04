@@ -63,6 +63,45 @@ class ReaderMlkitModule : Module() {
       return@AsyncFunction mapOf("uri" to Uri.fromFile(out).toString(), "width" to crop.width, "height" to crop.height, "base64" to b64)
     }
 
+    // Stores a comic page photo upright (max 3000 px) in the app's private storage.
+    AsyncFunction("savePage") { srcUri: String, comicId: String, name: String ->
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      val bmp = upright(context, Uri.parse(srcUri))
+      val k = min(1.0, 3000.0 / max(bmp.width, bmp.height))
+      val page = if (k < 1.0) Bitmap.createScaledBitmap(bmp, (bmp.width * k).roundToInt(), (bmp.height * k).roundToInt(), true) else bmp
+      val dir = File(context.filesDir, "comics/" + comicId.filter { it.isLetterOrDigit() || it == '-' }).apply { mkdirs() }
+      val f = File(dir, name.filter { it.isLetterOrDigit() || it == '-' } + ".jpg")
+      FileOutputStream(f).use { page.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+      return@AsyncFunction mapOf("uri" to Uri.fromFile(f).toString(), "width" to page.width, "height" to page.height)
+    }
+
+    AsyncFunction("deleteComic") { comicId: String ->
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      File(context.filesDir, "comics/" + comicId.filter { it.isLetterOrDigit() || it == '-' }).deleteRecursively()
+    }
+
+    // Comic panels in reading order, as boxes in image pixels (see PanelCutter).
+    AsyncFunction("detectPanels") { uri: String ->
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      val src = upright(context, Uri.parse(uri))
+      val k = min(1.0, 700.0 / max(src.width, src.height))
+      val w = max(1, (src.width * k).roundToInt())
+      val h = max(1, (src.height * k).roundToInt())
+      val small = Bitmap.createScaledBitmap(src, w, h, true)
+      val px = IntArray(w * h)
+      small.getPixels(px, 0, w, 0, 0, w, h)
+      val lum = IntArray(w * h) { i ->
+        val c = px[i]
+        (((c shr 16) and 0xff) * 299 + ((c shr 8) and 0xff) * 587 + (c and 0xff) * 114) / 1000
+      }
+      return@AsyncFunction PanelCutter.cut(lum, w, h).map { r ->
+        mapOf(
+          "left" to (r[0] / k).roundToInt(), "top" to (r[1] / k).roundToInt(),
+          "width" to ((r[2] - r[0]) / k).roundToInt(), "height" to ((r[3] - r[1]) / k).roundToInt(),
+        )
+      }
+    }
+
     // Text from an image file with positions: one entry per ML Kit block (a paragraph or a comic
     // bubble), lines joined into running text, plus each word's box in image pixels.
     AsyncFunction("recognize") { uri: String, promise: Promise ->
