@@ -1,0 +1,595 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#14213d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icon-192.png">
+</head>
+<body>
+<title>Czytnik z lektorem</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap">
+<style>
+/* Layout: one column like a handheld magnifier; lens (camera) on top, large-print reading card below, sticky action bar. */
+:root {
+  --bg: #f5f3ee;
+  --surface: #ffffff;
+  --ink: #14213d;
+  --muted: #4a5470;
+  --line: #d9d5ca;
+  --lens: #ffd23f;       /* magnifier yellow, primary action */
+  --lens-ink: #14213d;
+  --accent: #1d4ed8;
+  --hl: #ffe98a;         /* sentence being read */
+  --ok: #18794e;
+  --warn: #a14a00;
+  --font-body: "Atkinson Hyperlegible", "Segoe UI", Roboto, Arial, sans-serif;
+  --read-size: 28px;
+  --radius: 18px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1424; --surface: #16203a; --ink: #f4f1e8; --muted: #b6bdd0; --line: #2b3a5e;
+    --lens: #ffd23f; --lens-ink: #0d1424; --accent: #8fb3ff; --hl: #5a4a00; --ok: #5fd39a; --warn: #ffb070;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1424; --surface: #16203a; --ink: #f4f1e8; --muted: #b6bdd0; --line: #2b3a5e;
+  --lens: #ffd23f; --lens-ink: #0d1424; --accent: #8fb3ff; --hl: #5a4a00; --ok: #5fd39a; --warn: #ffb070;
+  color-scheme: dark;
+}
+/* High-contrast reading mode: yellow on black, the classic low-vision combination */
+:root[data-contrast="high"] {
+  --bg: #000; --surface: #000; --ink: #ffe600; --muted: #fff3a0; --line: #ffe600;
+  --lens: #ffe600; --lens-ink: #000; --accent: #ffffff; --hl: #333000; --ok: #7dff9b; --warn: #ffb070;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { min-height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font-family: var(--font-body); font-size: 18px; line-height: 1.45;
+  -webkit-text-size-adjust: 100%;
+}
+.wrap { max-width: 640px; margin: 0 auto; padding-inline: 16px; padding-block: 12px 140px; display: flex; flex-direction: column; gap: 16px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+h1 { font-size: 26px; margin: 0; letter-spacing: -0.01em; display: flex; align-items: center; gap: 10px; text-wrap: balance; }
+h1 .lensmark { width: 34px; height: 34px; flex: none; }
+.iconbtn {
+  min-width: 52px; min-height: 52px; border-radius: 14px; border: 2px solid var(--line);
+  background: var(--surface); color: var(--ink); font: inherit; font-size: 16px; font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 14px; cursor: pointer;
+}
+.iconbtn svg { width: 24px; height: 24px; }
+button:focus-visible, select:focus-visible, input:focus-visible, label.big:focus-within { outline: 4px solid var(--accent); outline-offset: 3px; }
+
+/* Lens (camera / photo) */
+.lens {
+  position: relative; border-radius: var(--radius); overflow: hidden; background: #111;
+  aspect-ratio: 4 / 3; max-width: 100%; border: 3px solid var(--ink);
+}
+.lens video, .lens img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lens img { object-fit: contain; }
+.lens .placeholder {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; color: #f4f1e8; text-align: center; padding: 20px; background:
+  radial-gradient(circle at 50% 45%, rgba(255,210,63,.18), transparent 60%), #111a2e;
+}
+.lens .placeholder svg { width: 72px; height: 72px; }
+.lens .placeholder p { margin: 0; font-size: 20px; max-width: 26ch; }
+.lens .busy {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 14px;
+  background: rgba(13,20,36,.72); color: #fff; font-size: 22px; font-weight: 700; text-align: center; padding: 16px;
+}
+.spinner { width: 54px; height: 54px; border-radius: 50%; border: 6px solid rgba(255,255,255,.25); border-top-color: var(--lens); animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Reading card */
+.card { background: var(--surface); border: 2px solid var(--line); border-radius: var(--radius); padding: 18px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.chip { display: inline-flex; align-items: center; gap: 6px; border: 2px solid var(--line); border-radius: 999px; padding: 4px 12px; font-size: 16px; font-weight: 700; color: var(--muted); }
+.chip.example { border-style: dashed; }
+.chip.ok { color: var(--ok); border-color: currentColor; }
+.chip.warn { color: var(--warn); border-color: currentColor; }
+.tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; background: var(--bg); padding: 5px; border-radius: 14px; border: 2px solid var(--line); }
+.tabs button { min-height: 48px; border: 0; border-radius: 10px; background: transparent; color: var(--ink); font: inherit; font-size: 18px; font-weight: 700; cursor: pointer; }
+.tabs button[aria-selected="true"] { background: var(--ink); color: var(--bg); }
+.reading {
+  font-size: var(--read-size); line-height: 1.5; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere;
+  max-width: 38ch; min-height: 2em;
+}
+.reading .s { border-radius: 6px; transition: background-color .15s; }
+.reading .s.now { background: var(--hl); box-shadow: 0 0 0 3px var(--hl); }
+.reading.empty { color: var(--muted); font-style: italic; }
+.sizebar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sizebar input[type=range] { flex: 1; min-width: 140px; accent-color: var(--accent); height: 36px; }
+.sizebar .a1 { font-size: 16px; font-weight: 700; } .sizebar .a2 { font-size: 30px; font-weight: 700; }
+.err { color: var(--warn); font-weight: 700; margin: 0; }
+
+/* Action bar */
+.bar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  background: var(--bg); border-top: 2px solid var(--line);
+}
+.bar .row { max-width: 640px; margin: 0 auto; display: grid; grid-template-columns: 1fr auto; gap: 10px; }
+.big {
+  min-height: 72px; border-radius: 20px; border: 3px solid var(--ink); background: var(--lens); color: var(--lens-ink);
+  font: inherit; font-size: 24px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 12px;
+  cursor: pointer; padding: 0 18px; text-align: center; position: relative;
+}
+.big svg { width: 32px; height: 32px; flex: none; }
+.big input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+.speak { background: var(--surface); color: var(--ink); min-width: 92px; }
+.speak[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.big[disabled] { opacity: .5; cursor: not-allowed; }
+
+/* Settings sheet */
+dialog { border: 0; padding: 0; background: transparent; max-width: 640px; width: calc(100% - 24px); }
+dialog::backdrop { background: rgba(0,0,0,.55); }
+.sheet { background: var(--surface); color: var(--ink); border-radius: var(--radius); border: 2px solid var(--line); padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+.sheet h2 { margin: 0; font-size: 24px; }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label, .field .lbl { font-weight: 700; font-size: 18px; }
+.field .hint { color: var(--muted); font-size: 15px; }
+.field select { min-height: 52px; font: inherit; font-size: 18px; border-radius: 12px; border: 2px solid var(--line); background: var(--bg); color: var(--ink); padding: 0 12px; }
+.switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 52px; }
+.switch input { width: 30px; height: 30px; accent-color: var(--accent); }
+.seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.seg button { min-height: 52px; border-radius: 12px; border: 2px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; font-weight: 700; cursor: pointer; }
+.seg button[aria-pressed="true"] { border-color: var(--ink); background: var(--ink); color: var(--bg); }
+.engineinfo { font-size: 15px; color: var(--muted); margin: 0; }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 3s; } .reading .s { transition: none; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>
+      <svg class="lensmark" viewBox="0 0 40 40" aria-hidden="true"><circle cx="17" cy="17" r="12" fill="var(--lens)" stroke="var(--ink)" stroke-width="3.5"/><path d="M26 26l9 9" stroke="var(--ink)" stroke-width="5" stroke-linecap="round"/><path d="M11 15h12M11 20h8" stroke="var(--ink)" stroke-width="2.5" stroke-linecap="round"/></svg>
+      Czytnik
+    </h1>
+    <button class="iconbtn" id="openSettings" aria-label="Ustawienia">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+      Ustawienia
+    </button>
+  </header>
+
+  <section class="lens" id="lens" aria-label="Podgląd zdjęcia">
+    <video id="video" playsinline muted hidden></video>
+    <img id="photo" alt="Zrobione zdjęcie tekstu" hidden>
+    <div class="placeholder" id="placeholder">
+      <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round" aria-hidden="true"><path d="M6 15h8l4-6h12l4 6h8v24H6z"/><circle cx="24" cy="26" r="8"/></svg>
+      <p>Skieruj aparat na tekst i naciśnij żółty przycisk.</p>
+    </div>
+    <div class="busy" id="busy" hidden><div class="spinner"></div><span id="busyText">Czytam tekst…</span></div>
+  </section>
+
+  <section class="card" aria-live="polite">
+    <div class="meta" id="meta">
+      <span class="chip example">Przykład</span>
+      <span class="chip">angielski → polski</span>
+    </div>
+    <div class="tabs" role="tablist" aria-label="Wersja tekstu">
+      <button role="tab" id="tabTr" aria-selected="true">Tłumaczenie</button>
+      <button role="tab" id="tabOr" aria-selected="false">Oryginał</button>
+    </div>
+    <p class="reading" id="reading"></p>
+    <p class="err" id="err" hidden></p>
+    <div class="sizebar">
+      <span class="a1" aria-hidden="true">A</span>
+      <input type="range" id="size" min="18" max="56" step="2" value="28" aria-label="Wielkość liter">
+      <span class="a2" aria-hidden="true">A</span>
+    </div>
+  </section>
+</div>
+
+<div class="bar">
+  <div class="row">
+    <button class="big" id="shoot" hidden>
+      <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linejoin="round" aria-hidden="true"><path d="M6 15h8l4-6h12l4 6h8v24H6z"/><circle cx="24" cy="26" r="8"/></svg>
+      Czytaj
+    </button>
+    <label class="big" id="pickWrap">
+      <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linejoin="round" aria-hidden="true"><path d="M6 15h8l4-6h12l4 6h8v24H6z"/><circle cx="24" cy="26" r="8"/></svg>
+      <span id="pickLabel">Zrób zdjęcie</span>
+      <input type="file" id="pick" accept="image/*" capture="environment" aria-label="Zrób zdjęcie tekstu">
+    </label>
+    <button class="big speak" id="speak" aria-pressed="false" aria-label="Czytaj na głos">
+      <svg id="icoPlay" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 4V5L7 9H3z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <svg id="icoStop" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" hidden><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+    </button>
+  </div>
+</div>
+
+<dialog id="settings">
+  <form class="sheet" method="dialog">
+    <h2>Ustawienia</h2>
+    <div class="field">
+      <label for="target">Język lektora</label>
+      <select id="target"></select>
+      <span class="hint">Tekst w innym języku zostanie przetłumaczony na ten język.</span>
+    </div>
+    <div class="field">
+      <label for="rate">Tempo czytania</label>
+      <select id="rate">
+        <option value="0.75">Wolno</option>
+        <option value="0.9">Spokojnie</option>
+        <option value="1">Normalnie</option>
+        <option value="1.2">Szybko</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="voice">Głos</label>
+      <select id="voice"></select>
+    </div>
+    <div class="switch">
+      <label for="autoread" class="lbl">Czytaj od razu po zdjęciu</label>
+      <input type="checkbox" id="autoread">
+    </div>
+    <div class="field">
+      <span class="lbl">Wygląd</span>
+      <div class="seg" id="themeSeg">
+        <button type="button" data-v="auto">Auto</button>
+        <button type="button" data-v="light">Jasny</button>
+        <button type="button" data-v="high">Kontrast</button>
+      </div>
+    </div>
+    <div class="field">
+      <label for="engine">Rozpoznawanie tekstu</label>
+      <select id="engine">
+        <option value="auto">Automatycznie</option>
+        <option value="claude">Claude (najdokładniej)</option>
+        <option value="offline">Tesseract + MyMemory (bez konta)</option>
+      </select>
+      <p class="engineinfo" id="engineInfo">Sprawdzam dostępność…</p>
+    </div>
+    <button class="big" value="close">Gotowe</button>
+  </form>
+</dialog>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+
+  // ---------- languages ----------
+  const LANGS = {
+    pl: "polski", en: "angielski", de: "niemiecki", uk: "ukraiński", fr: "francuski",
+    es: "hiszpański", it: "włoski", cs: "czeski", ru: "rosyjski", pt: "portugalski", nl: "niderlandzki"
+  };
+  const TARGETS = ["pl", "en", "de", "uk", "fr", "es", "it"];
+  const langName = (c) => LANGS[c] || c || "nieznany";
+
+  // ---------- settings (per device, best effort) ----------
+  const DEF = { target: "pl", rate: "0.9", voice: "", autoread: true, theme: "auto", engine: "auto", size: 28 };
+  let S = { ...DEF };
+  try { S = { ...DEF, ...JSON.parse(localStorage.getItem("czytnik.settings") || "{}") }; } catch (e) {}
+  const save = () => { try { localStorage.setItem("czytnik.settings", JSON.stringify(S)); } catch (e) {} };
+
+  // ---------- state ----------
+  const EXAMPLE = {
+    example: true, lang: "en",
+    text: "Take 1 tablet twice a day after meals. Do not exceed 4 tablets in 24 hours. Keep out of the reach of children.",
+    translation: "Przyjmuj 1 tabletkę dwa razy dziennie po posiłku. Nie przekraczaj 4 tabletek w ciągu 24 godzin. Przechowuj w miejscu niedostępnym dla dzieci."
+  };
+  let result = EXAMPLE;
+  let view = "tr";            // "tr" | "or"
+  let engineUsed = "";
+
+  // ---------- theme / size ----------
+  let weSetLight = false;
+  function applyTheme() {
+    const r = document.documentElement;
+    if (S.theme === "high") r.setAttribute("data-contrast", "high"); else r.removeAttribute("data-contrast");
+    if (S.theme === "light") { r.setAttribute("data-theme", "light"); weSetLight = true; }
+    else if (weSetLight) { r.removeAttribute("data-theme"); weSetLight = false; }
+    document.querySelectorAll("#themeSeg button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === S.theme)));
+  }
+  function applySize() { document.documentElement.style.setProperty("--read-size", S.size + "px"); $("size").value = S.size; }
+  $("size").addEventListener("input", (e) => { S.size = +e.target.value; applySize(); save(); });
+
+  // ---------- render ----------
+  function splitSentences(t) {
+    const parts = String(t || "").match(/[^.!?…\n]+(?:[.!?…]+["”»)]?|\n+|$)\s*/g);
+    return (parts || []).filter(s => s.trim());
+  }
+  function currentText() { return view === "tr" ? (result.translation || result.text) : result.text; }
+  function currentLang() { return view === "tr" ? S.target : (result.lang || S.target); }
+  function render() {
+    const meta = $("meta"); meta.textContent = "";
+    const chip = (txt, cls) => { const s = document.createElement("span"); s.className = "chip " + (cls || ""); s.textContent = txt; meta.append(s); };
+    if (result.example) chip("Przykład", "example");
+    if (result.text) {
+      const same = !result.lang || result.lang === S.target;
+      chip(same ? langName(result.lang || S.target) : `${langName(result.lang)} → ${langName(S.target)}`, same ? "" : "ok");
+    }
+    if (result.note) chip(result.note, "warn");
+    if (engineUsed && !result.example) chip(engineUsed === "claude" ? "Claude" : "Tesseract", "");
+    const hasTr = result.translation && result.translation !== result.text;
+    $("tabTr").parentElement.hidden = !hasTr;
+    if (!hasTr) view = "or";
+    $("tabTr").setAttribute("aria-selected", String(view === "tr"));
+    $("tabOr").setAttribute("aria-selected", String(view === "or"));
+    const p = $("reading"); p.textContent = "";
+    const txt = currentText();
+    p.lang = currentLang();
+    p.classList.toggle("empty", !txt);
+    if (!txt) { p.textContent = "Nie znalazłem tekstu na zdjęciu. Podejdź bliżej i spróbuj w lepszym świetle."; return; }
+    splitSentences(txt).forEach((s, i) => { const sp = document.createElement("span"); sp.className = "s"; sp.dataset.i = i; sp.textContent = s; p.append(sp); });
+  }
+  $("tabTr").onclick = () => { stopSpeak(); view = "tr"; render(); };
+  $("tabOr").onclick = () => { stopSpeak(); view = "or"; render(); };
+  function showErr(msg) { const e = $("err"); e.textContent = msg || ""; e.hidden = !msg; }
+
+  // ---------- speech ----------
+  const synth = window.speechSynthesis;
+  let speaking = false, utterQueue = [];
+  function voicesFor(lang) {
+    if (!synth) return [];
+    return synth.getVoices().filter(v => (v.lang || "").toLowerCase().replace("_", "-").startsWith(lang));
+  }
+  function pickVoice(lang) {
+    const vs = voicesFor(lang);
+    if (S.voice) { const v = vs.find(v => v.voiceURI === S.voice); if (v) return v; }
+    return vs.find(v => v.localService && v.default) || vs.find(v => /google|enhanced|premium|natural/i.test(v.name)) || vs[0] || null;
+  }
+  function setSpeakUI(on) {
+    speaking = on;
+    $("speak").setAttribute("aria-pressed", String(on));
+    $("speak").setAttribute("aria-label", on ? "Zatrzymaj czytanie" : "Czytaj na głos");
+    $("icoPlay").hidden = on; $("icoStop").hidden = !on;
+    if (!on) document.querySelectorAll(".reading .s.now").forEach(s => s.classList.remove("now"));
+  }
+  function stopSpeak() { if (synth) synth.cancel(); utterQueue = []; setSpeakUI(false); }
+  function speak() {
+    if (!synth) { showErr("Ta przeglądarka nie ma syntezy mowy. Spróbuj w Chrome lub Safari."); return; }
+    stopSpeak();
+    const txt = currentText(); if (!txt) return;
+    const lang = currentLang();
+    const voice = pickVoice(lang);
+    const spans = [...document.querySelectorAll(".reading .s")];
+    const parts = splitSentences(txt);
+    setSpeakUI(true);
+    // Chrome stops long utterances after ~15 s, so speak sentence by sentence
+    utterQueue = parts.map((s, i) => {
+      const u = new SpeechSynthesisUtterance(s.trim());
+      u.lang = voice ? voice.lang : lang; if (voice) u.voice = voice;
+      u.rate = +S.rate || 1;
+      u.onstart = () => { spans.forEach(x => x.classList.remove("now")); const el = spans[i]; if (el) { el.classList.add("now"); el.scrollIntoView({ block: "nearest", behavior: "smooth" }); } };
+      u.onend = () => { if (i === parts.length - 1) setSpeakUI(false); };
+      u.onerror = (e) => { if (e.error !== "interrupted" && e.error !== "canceled") setSpeakUI(false); };
+      return u;
+    });
+    utterQueue.forEach(u => synth.speak(u));
+    if (!voice && synth.getVoices().length) showErr(`Brak głosu dla języka: ${langName(lang)}. Doinstaluj go w ustawieniach telefonu (Zamiana tekstu na mowę).`);
+  }
+  // iOS only lets speech start from a tap: prime the engine inside the tap handler
+  function primeSpeech() { try { if (synth && !speaking) { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; synth.speak(u); } } catch (e) {} }
+  $("speak").onclick = () => { speaking ? stopSpeak() : (showErr(""), speak()); };
+
+  // ---------- image prep ----------
+  async function toJpeg(file, maxSide) {
+    let src;
+    try { src = await createImageBitmap(file, { imageOrientation: "from-image" }); }
+    catch (e) {
+      src = await new Promise((res, rej) => { const i = new Image(); i.onload = () => res(i); i.onerror = rej; i.src = URL.createObjectURL(file); });
+    }
+    const w = src.width || src.naturalWidth, h = src.height || src.naturalHeight;
+    const k = Math.min(1, maxSide / Math.max(w, h));
+    const c = document.createElement("canvas"); c.width = Math.round(w * k); c.height = Math.round(h * k);
+    c.getContext("2d").drawImage(src, 0, 0, c.width, c.height);
+    return await new Promise(r => c.toBlob(r, "image/jpeg", 0.9));
+  }
+
+  // ---------- engine: Claude (inside the Claude app/artifact viewer) ----------
+  let sample = null, sampleImages = false;
+  const sampleReady = (async () => {
+    try {
+      if (!window.claude || typeof window.claude.use !== "function") return;
+      sample = await window.claude.use("sample");
+      if (sample) { const l = await sample.limits().catch(() => null); sampleImages = !!(l && l.images); }
+    } catch (e) { sample = null; }
+  })().finally(updateEngineInfo);
+
+  async function readWithClaude(jpeg) {
+    const target = S.target;
+    const prompt =
+`Na zdjęciu jest tekst (np. etykieta, ulotka, list, menu, ekran). Zadania:
+1. Przepisz cały czytelny tekst dokładnie, w naturalnej kolejności czytania, zachowując akapity. Pomiń szum graficzny (kody kreskowe, pojedyncze litery z tła).
+2. Rozpoznaj główny język tekstu (kod ISO 639-1, np. "en").
+3. Jeśli język tekstu jest inny niż "${target}" (${langName(target)}), przetłumacz tekst na ${langName(target)} naturalnie, tak jak przeczytałby go lektor. Jeśli jest taki sam, "translation" ma być identyczne z "text".
+Odpowiedz wyłącznie obiektem JSON:
+{"text": "...", "lang": "en", "translation": "..."}
+Jeśli na zdjęciu nie ma tekstu: {"text": "", "lang": "", "translation": ""}`;
+    const r = await sample.json(prompt, { images: [jpeg], modelTier: "quick" });
+    if (!r || typeof r !== "object") throw { code: "invalid_json" };
+    return { text: String(r.text || "").trim(), lang: String(r.lang || "").toLowerCase().slice(0, 2), translation: String(r.translation || "").trim() };
+  }
+
+  // ---------- engine: Tesseract.js + MyMemory (standalone / no Claude) ----------
+  const TESS = Object.assign({
+    script: "https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js",
+    langs: "pol+eng+deu", options: {}
+  }, window.CZYTNIK_TESS || {});
+  let tessWorker = null;
+  function loadScript(src) {
+    return new Promise((res, rej) => { const s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = () => rej(new Error("script")); document.head.append(s); });
+  }
+  async function getTess() {
+    if (tessWorker) return tessWorker;
+    if (!window.Tesseract) await loadScript(TESS.script);
+    tessWorker = await window.Tesseract.createWorker(TESS.langs, 1, TESS.options);
+    return tessWorker;
+  }
+  const STOP = {
+    pl: ["i","w","nie","się","na","jest","to","z","do","że","jak","po","dla","oraz","lub","przez","od","tylko","ale","czy"],
+    en: ["the","and","of","to","a","in","is","for","with","not","on","this","be","or","are","do","your","you","it","after"],
+    de: ["der","die","und","das","nicht","ist","mit","ein","zu","den","für","von","sie","auf","eine","im","bei","oder","nach","des"],
+    fr: ["le","la","les","et","de","des","un","une","est","pour","ne","pas","dans","avec","au","sur","du","vous","par","ou"],
+    es: ["el","la","los","las","y","de","que","en","un","una","es","por","con","no","para","del","se","al","o","su"],
+    it: ["il","la","di","e","che","non","per","un","una","con","del","della","sono","da","in","al","gli","le","si","dei"]
+  };
+  function detectLang(t) {
+    const s = " " + t.toLowerCase() + " ";
+    if ((s.match(/[а-яёіїєґ]/g) || []).length > s.length * 0.2) return /[іїєґ]/.test(s) ? "uk" : "ru";
+    const words = s.match(/\p{L}+/gu) || [];
+    const score = {};
+    for (const [l, list] of Object.entries(STOP)) { const set = new Set(list); score[l] = words.filter(w => set.has(w)).length; }
+    score.pl += (s.match(/[ąćęłńśźż]/g) || []).length * 2;
+    score.de += (s.match(/[äöüß]/g) || []).length * 2;
+    score.es += (s.match(/[ñ¿¡]/g) || []).length * 3;
+    score.fr += (s.match(/[çœèêàù]/g) || []).length;
+    const best = Object.entries(score).sort((a, b) => b[1] - a[1])[0];
+    return best && best[1] > 0 ? best[0] : "";
+  }
+  function chunks(t, maxBytes) {
+    const enc = new TextEncoder(), out = []; let cur = "";
+    for (const s of splitSentences(t)) {
+      if (enc.encode(cur + s).length > maxBytes && cur) { out.push(cur); cur = ""; }
+      if (enc.encode(s).length > maxBytes) { // very long sentence: cut on spaces
+        let piece = "";
+        for (const w of s.split(/(\s+)/)) { if (enc.encode(piece + w).length > maxBytes && piece) { out.push(piece); piece = ""; } piece += w; }
+        cur += piece;
+      } else cur += s;
+    }
+    if (cur.trim()) out.push(cur);
+    return out;
+  }
+  async function translateMyMemory(text, from, to) {
+    const out = [];
+    for (const c of chunks(text, 450)) { // API limit: 500 bytes per query
+      const url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(c) + "&langpair=" + from + "|" + to;
+      const r = await fetch(url); if (!r.ok) throw new Error("http " + r.status);
+      const j = await r.json();
+      if (+j.responseStatus !== 200 || !j.responseData) throw new Error(j.responseDetails || "translate");
+      out.push(j.responseData.translatedText);
+    }
+    return out.join(" ").replace(/\s+\n/g, "\n");
+  }
+  async function readOffline(jpeg) {
+    busy("Czytam tekst (pierwszy raz pobieram słowniki)…");
+    const w = await getTess();
+    busy("Czytam tekst…");
+    const { data } = await w.recognize(jpeg);
+    const text = (data.text || "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    const lang = detectLang(text);
+    let translation = text, note = "";
+    if (text && lang && lang !== S.target) {
+      busy("Tłumaczę…");
+      try { translation = await translateMyMemory(text, lang, S.target); }
+      catch (e) { translation = ""; note = "Tłumaczenie niedostępne"; }
+    }
+    return { text, lang, translation: translation || text, note };
+  }
+
+  function chooseEngine() {
+    const claudeOK = sample && sampleImages;
+    if (S.engine === "claude") return claudeOK ? "claude" : "offline";
+    if (S.engine === "offline") return "offline";
+    return claudeOK ? "claude" : "offline";
+  }
+  function updateEngineInfo() {
+    const el = $("engineInfo");
+    if (sample && sampleImages) el.textContent = "Claude jest dostępny: czyta też drobny i krzywy druk. Pierwsze użycie poprosi o zgodę; zużywa limit Twojego konta Claude.";
+    else el.textContent = "Claude niedostępny w tym oknie. Używam Tesseract (rozpoznawanie w telefonie) i MyMemory (darmowe tłumaczenie online).";
+  }
+
+  // ---------- pipeline ----------
+  function busy(msg) { $("busy").hidden = !msg; if (msg) $("busyText").textContent = msg; }
+  let running = false;
+  async function process(fileOrBlob) {
+    if (running) return; running = true;
+    stopSpeak(); showErr("");
+    $("pickWrap").setAttribute("aria-disabled", "true"); $("shoot").disabled = true;
+    try {
+      const jpeg = await toJpeg(fileOrBlob, 2400);
+      const ph = $("photo"); if (ph.src) URL.revokeObjectURL(ph.src);
+      ph.src = URL.createObjectURL(jpeg); ph.hidden = false; $("placeholder").hidden = true;
+      if (!liveStream) $("video").hidden = true;
+      busy("Czytam tekst…");
+      await sampleReady;
+      let engine = chooseEngine(), r;
+      if (engine === "claude") {
+        try { r = await readWithClaude(jpeg); }
+        catch (e) {
+          if (e && (e.code === "not_granted" || e.code === "sampling_disabled" || e.code === "images_unavailable" || e.code === "capability_disabled")) { sample = null; updateEngineInfo(); }
+          if (e && e.code === "rate_limited") { showErr("Limit Claude chwilowo wyczerpany. Czytam w trybie offline."); }
+          engine = "offline"; r = await readOffline(jpeg);
+        }
+      } else r = await readOffline(jpeg);
+      engineUsed = engine;
+      result = r; view = r.translation && r.translation !== r.text ? "tr" : "or";
+      render();
+      if (S.autoread && r.text) speak();
+    } catch (e) {
+      console.error(e);
+      showErr("Nie udało się odczytać zdjęcia. Sprawdź połączenie z internetem i spróbuj ponownie.");
+    } finally {
+      busy(""); running = false;
+      $("pickWrap").removeAttribute("aria-disabled"); $("shoot").disabled = false;
+      $("pick").value = "";
+    }
+  }
+  $("pick").addEventListener("click", primeSpeech);
+  $("pick").addEventListener("change", (e) => { const f = e.target.files && e.target.files[0]; if (f) process(f); });
+
+  // ---------- live camera (works when the page runs as its own app, not inside a frame) ----------
+  let liveStream = null;
+  async function startLive() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+    let framed = false; try { framed = window.top !== window; } catch (e) { framed = true; }
+    if (framed) return;
+    try {
+      liveStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1440 } }, audio: false });
+      const v = $("video"); v.srcObject = liveStream; v.hidden = false; await v.play();
+      $("placeholder").hidden = true;
+      $("shoot").hidden = false;
+      $("pickLabel").textContent = "Z galerii"; $("pick").removeAttribute("capture");
+      $("pickWrap").style.fontSize = "18px";
+      document.querySelector(".bar .row").style.gridTemplateColumns = "1fr auto auto";
+    } catch (e) { liveStream = null; }
+  }
+  $("shoot").addEventListener("click", () => {
+    primeSpeech();
+    const v = $("video"); if (!v.videoWidth) return;
+    const c = document.createElement("canvas"); c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext("2d").drawImage(v, 0, 0);
+    c.toBlob((b) => { if (b) { $("video").hidden = true; process(b).then(() => { $("photo").hidden = true; $("video").hidden = false; }); } }, "image/jpeg", 0.92);
+  });
+
+  // ---------- settings UI ----------
+  function fillVoices() {
+    const sel = $("voice"); sel.textContent = "";
+    const auto = new Option("Automatyczny", ""); sel.append(auto);
+    voicesFor(S.target).forEach(v => sel.append(new Option(v.name + (v.localService ? "" : " (online)"), v.voiceURI)));
+    sel.value = S.voice; if (sel.value !== S.voice) sel.value = "";
+  }
+  TARGETS.forEach(c => $("target").append(new Option(langName(c), c)));
+  $("target").value = S.target; $("rate").value = S.rate; $("autoread").checked = S.autoread; $("engine").value = S.engine;
+  $("target").onchange = (e) => { S.target = e.target.value; S.voice = ""; fillVoices(); save(); };
+  $("rate").onchange = (e) => { S.rate = e.target.value; save(); };
+  $("voice").onchange = (e) => { S.voice = e.target.value; save(); };
+  $("autoread").onchange = (e) => { S.autoread = e.target.checked; save(); };
+  $("engine").onchange = (e) => { S.engine = e.target.value; save(); };
+  $("themeSeg").onclick = (e) => { const b = e.target.closest("button"); if (!b) return; S.theme = b.dataset.v; applyTheme(); save(); };
+  $("openSettings").onclick = () => { fillVoices(); const d = $("settings"); d.showModal ? d.showModal() : d.setAttribute("open", ""); };
+  if (synth) synth.addEventListener ? synth.addEventListener("voiceschanged", fillVoices) : (synth.onvoiceschanged = fillVoices);
+
+  // ---------- boot ----------
+  applyTheme(); applySize(); render(); updateEngineInfo(); startLive();
+  if ("serviceWorker" in navigator && location.protocol === "https:") {
+    let framed = false; try { framed = window.top !== window; } catch (e) { framed = true; }
+    if (!framed) navigator.serviceWorker.register("sw.js").catch(() => {});
+  }
+})();
+</script>
+
+</body>
+</html>
