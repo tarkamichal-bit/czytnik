@@ -6,6 +6,15 @@ import Icon, { IconName } from './Icon';
 // ---------- small components ----------
 export type S = ReturnType<typeof makeStyles>;
 
+type Rect = { left: number; top: number; width: number; height: number };
+/** A red line just under the word being read (r in view pixels; z = current zoom, so it stays thin). */
+export function underline(r: Rect, z = 1) {
+  return {
+    position: 'absolute' as const, left: r.left, top: r.top + r.height + 2 / z, width: r.width,
+    height: 3 / z, borderRadius: 1.5 / z, backgroundColor: '#e63946',
+  };
+}
+
 export function BigButton({ s, label, onPress, disabled, flex, icon, t }: { s: S; label: string; onPress: () => void; disabled?: boolean; flex?: boolean; icon?: IconName; t?: Theme }) {
   return (
     <Pressable
@@ -88,9 +97,9 @@ export function makeStyles(t: Theme) {
     lens: { flex: 1, minHeight: 200, marginHorizontal: 12, marginTop: 8, borderRadius: 18, overflow: 'hidden', borderWidth: 2, borderColor: t.ink, backgroundColor: '#111' },
     lensReading: { flex: 1.4 },
     frameGuide: { position: 'absolute', borderWidth: 4, borderColor: 'rgba(255,210,63,0.95)', borderRadius: 14 },
-    segBox: { position: 'absolute', borderWidth: 2, borderColor: 'rgba(255,210,63,0.75)', borderRadius: 8 },
-    segBoxNow: { borderWidth: 3, borderColor: '#ffd23f', backgroundColor: 'rgba(255,210,63,0.22)' },
-    wordBox: { position: 'absolute', borderWidth: 1.5, borderColor: '#e63946', borderRadius: 3, backgroundColor: 'rgba(255,233,138,0.22)' },
+    // fragments are only tap targets: no frame drawn over the letters
+    segBox: { position: 'absolute' },
+    segBoxNow: {},
     hint: { fontFamily: FONT, fontSize: 16, color: t.muted, textAlign: 'center', paddingHorizontal: 16, paddingTop: 8 },
     error: { fontFamily: FONT_BOLD, fontSize: 16, color: t.warn, paddingHorizontal: 16, paddingTop: 6 },
     bar: { flexDirection: 'row', alignItems: 'stretch', gap: 8, paddingHorizontal: 12, paddingTop: 10, marginTop: 6 },

@@ -8,7 +8,7 @@ export type Bubble = { text: string; translation: string; box: Box; words: OcrWo
 export type Scene = { box: Box; bubbles: Bubble[] };
 export type PageAnalysis = { version?: number; target: string; engine: Engine; lang: string; scenes: Scene[]; note?: string };
 /** Bump when the analysis changes, so pages read by an older version are analysed again. */
-export const ANALYSIS_VERSION = 3;
+export const ANALYSIS_VERSION = 4;
 export type ComicPage = SavedPage & { analysis?: PageAnalysis };
 export type Comic = { id: string; title: string; createdAt: number; pages: ComicPage[] };
 
@@ -28,6 +28,32 @@ export async function saveComics(list: Comic[]) {
 
 const center = (b: Box) => ({ x: b.left + b.width / 2, y: b.top + b.height / 2 });
 const contains = (b: Box, p: { x: number; y: number }) => p.x >= b.left && p.x <= b.left + b.width && p.y >= b.top && p.y <= b.top + b.height;
+
+const area = (b: Box) => b.width * b.height;
+function union(boxes: Box[]): Box {
+  const x0 = Math.min(...boxes.map((b) => b.left)), y0 = Math.min(...boxes.map((b) => b.top));
+  const x1 = Math.max(...boxes.map((b) => b.left + b.width)), y1 = Math.max(...boxes.map((b) => b.top + b.height));
+  return { left: x0, top: y0, width: x1 - x0, height: y1 - y0 };
+}
+/** Consecutive bubbles (in reading order) stay together while their joint box is small. */
+function groupNear(items: Bubble[], maxArea: number): Bubble[][] {
+  const out: Bubble[][] = [];
+  for (const b of items) {
+    const g = out[out.length - 1];
+    if (g && area(union([...g, b].map((x) => x.box))) <= maxArea) g.push(b);
+    else out.push([b]);
+  }
+  return out;
+}
+/** Some artwork around a group of bubbles, kept inside the panel; at least about a third of the page wide. */
+function frameAround(b: Box, within: Box, page: Box): Box {
+  const w = Math.min(within.width, Math.max(page.width * 0.35, b.width * 1.8));
+  const h = Math.min(within.height, Math.max(w * 0.75, b.height * 2.4));
+  const c = center(b);
+  const left = Math.max(within.left, Math.min(within.left + within.width - w, c.x - w / 2));
+  const top = Math.max(within.top, Math.min(within.top + within.height - h, c.y - h / 2));
+  return { left, top, width: w, height: h };
+}
 
 // Bubbles of one panel in reading order: rows top to bottom, left to right inside a row.
 function readingOrder<T extends { box: Box }>(items: T[]): T[] {
@@ -87,7 +113,9 @@ export async function analyzePage(original: SavedPage, o: Analyze): Promise<{ an
     if (st.uri !== original.uri) o.onPage?.(page);
   } catch {}
   o.onBusy('Szukam kadrów i dymków…');
-  const [panels, ocr] = await Promise.all([Reader.detectPanels(page.uri), Reader.recognize(page.uri)]);
+  const ocr = await Reader.recognize(page.uri);
+  // bubbles may be drawn across gutters: the cutter treats them as paper
+  const panels = await Reader.detectPanels(page.uri, ocr.blocks.flatMap((b) => [b.left, b.top, b.width, b.height]));
   let bubbles: Bubble[] = ocr.blocks.map((b) => ({ text: b.text, translation: b.text, box: b, words: b.words }));
   bubbles = bubbles.filter((b) => !isPageNumber(b, panels, page));
   let lang = o.target;
@@ -152,20 +180,20 @@ export async function analyzePage(original: SavedPage, o: Analyze): Promise<{ an
       box: p,
       bubbles: order ? groups[i].sort((a, b) => (rank.get(a) ?? 0) - (rank.get(b) ?? 0)) : readingOrder(groups[i]),
     }));
+    // a "panel" over a large part of the page with bubbles far apart is most likely several panels that
+    // could not be separated: then nearby bubbles are shown together, each group zoomed in on its own
+    const all = union(panels);
+    scenes = scenes.flatMap((sc) => {
+      if (sc.bubbles.length < 2 || area(sc.box) < area(all) * 0.45) return [sc];
+      return groupNear(sc.bubbles, area(all) * 0.12).map((g) => ({ box: frameAround(union(g.map((b) => b.box)), sc.box, all), bubbles: g }));
+    });
   } else {
-    // no panel grid found: one scene per bubble, framed with some surrounding artwork
-    const minW = page.width * 0.35;
+    // no panel grid found: nearby bubbles together, framed with some surrounding artwork
+    const whole = { left: 0, top: 0, width: page.width, height: page.height };
     const live = bubbles.filter((b) => b.text.trim());
     const ordered = order ? order.map((i) => bubbles[i]).filter((b) => b && b.text.trim()) : readingOrder(live);
-    scenes = ordered.map((b) => {
-      const w = Math.max(minW, b.box.width * 2.2);
-      const h = Math.max(minW * 0.75, b.box.height * 3);
-      const c = center(b.box);
-      const left = Math.max(0, Math.min(page.width - w, c.x - w / 2));
-      const top = Math.max(0, Math.min(page.height - h, c.y - h / 2));
-      return { box: { left, top, width: Math.min(w, page.width), height: Math.min(h, page.height) }, bubbles: [b] };
-    });
-    if (!scenes.length) scenes = [{ box: { left: 0, top: 0, width: page.width, height: page.height }, bubbles: [] }];
+    scenes = groupNear(ordered, area(whole) * 0.12).map((g) => ({ box: frameAround(union(g.map((b) => b.box)), whole, whole), bubbles: g }));
+    if (!scenes.length) scenes = [{ box: whole, bubbles: [] }];
   }
   return { analysis: { version: ANALYSIS_VERSION, target: o.target, engine, lang, scenes, note }, page };
 }

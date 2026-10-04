@@ -4,7 +4,7 @@ import { Text } from './Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Box, OcrWord } from '../modules/reader-mlkit/src/ReaderMlkitModule';
 import { FONT_BOLD, Theme, Token, shift } from './shared';
-import { OverlayButton, S } from './ui';
+import { OverlayButton, S, underline } from './ui';
 import Icon from './Icon';
 
 type Seg = { box?: Box; words: OcrWord[] };
@@ -97,12 +97,12 @@ export default function FullReader(p: Props) {
                   onPress={() => p.onTap(i)}
                   accessibilityRole="button"
                   accessibilityLabel={`Czytaj od fragmentu ${i + 1}`}
-                  style={[p.s.segBox, place(g.box, 4 / zoomNow), { borderWidth: 1.5 / zoomNow }, p.current === i && [p.s.segBoxNow, { borderWidth: 2 / zoomNow }]]}
+                  style={[p.s.segBox, place(g.box, 4 / zoomNow)]}
                 />
               ) : null,
             )}
             {p.wordBox && (
-              <View pointerEvents="none" style={[p.s.wordBox, place(p.wordBox, 1 / zoomNow), { borderWidth: 1.5 / zoomNow, borderRadius: 3 / zoomNow }]} />
+              <View pointerEvents="none" style={underline(place(p.wordBox), zoomNow)} />
             )}
           </Animated.View>
         )}

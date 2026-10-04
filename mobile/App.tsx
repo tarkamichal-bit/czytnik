@@ -32,7 +32,7 @@ import FullReader from './src/FullReader';
 import {
   DEFAULTS, Engine, NO_USAGE, RATES, Settings, VoiceStyle, TARGETS, THEMES, Usage, VOICES, fmtInt, fmtUsd, langName, tokenAt, tokenize, voiceOf, voiceTag, wordClock,
 } from './src/shared';
-import { BigButton, BusyOverlay, Chip, IconButton, Option, OverlayButton, makeStyles } from './src/ui';
+import { BigButton, BusyOverlay, Chip, IconButton, Option, OverlayButton, makeStyles, underline } from './src/ui';
 import ComicMode from './src/ComicMode';
 import Background from './src/Background';
 import { MODELS, modelOf } from './src/pricing';
@@ -388,7 +388,7 @@ function Main() {
             />
           ) : null,
         )}
-        {wordBox && <View pointerEvents="none" style={[s.wordBox, place(wordBox, 1)]} />}
+        {wordBox && <View pointerEvents="none" style={underline(place(wordBox))} />}
       </>
     );
   };

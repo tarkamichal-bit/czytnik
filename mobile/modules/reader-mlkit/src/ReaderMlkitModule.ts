@@ -24,8 +24,8 @@ declare class ReaderMlkitModule extends NativeModule<{}> {
   erase(uri: string, points: number[], counts: number[], brush: number): Promise<SavedPage>;
   /** Turns a tilted page photo straight (angle in degrees; 0 = already straight, same uri). */
   straighten(uri: string): Promise<SavedPage & { angle: number }>;
-  /** Comic panels in reading order (image pixels). */
-  detectPanels(uri: string): Promise<Box[]>;
+  /** Comic panels in reading order (image pixels). texts: recognised text boxes flattened as left, top, width, height. */
+  detectPanels(uri: string, texts: number[]): Promise<Box[]>;
 }
 
 export default requireNativeModule<ReaderMlkitModule>('ReaderMlkit');

@@ -157,7 +157,8 @@ class ReaderMlkitModule : Module() {
     }
 
     // Comic panels in reading order, as boxes in image pixels (see PanelCutter).
-    AsyncFunction("detectPanels") { uri: String ->
+    // texts: boxes of recognised text as [left, top, width, height, ...] in image pixels (their bubbles may cross gutters)
+    AsyncFunction("detectPanels") { uri: String, texts: List<Double> ->
       val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
       val src = upright(context, Uri.parse(uri))
       val k = min(1.0, 700.0 / max(src.width, src.height))
@@ -170,7 +171,10 @@ class ReaderMlkitModule : Module() {
         val c = px[i]
         (((c shr 16) and 0xff) * 299 + ((c shr 8) and 0xff) * 587 + (c and 0xff) * 114) / 1000
       }
-      return@AsyncFunction PanelCutter.cut(lum, w, h).map { r ->
+      val boxes = texts.chunked(4).filter { it.size == 4 }.map { b ->
+        intArrayOf((b[0] * k).roundToInt(), (b[1] * k).roundToInt(), ((b[0] + b[2]) * k).roundToInt(), ((b[1] + b[3]) * k).roundToInt())
+      }
+      return@AsyncFunction PanelCutter.cut(lum, w, h, boxes).map { r ->
         mapOf(
           "left" to (r[0] / k).roundToInt(), "top" to (r[1] / k).roundToInt(),
           "width" to ((r[2] - r[0]) / k).roundToInt(), "height" to ((r[3] - r[1]) / k).roundToInt(),

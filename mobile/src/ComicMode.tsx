@@ -9,7 +9,7 @@ import Eraser from './Eraser';
 import Camera from './Camera';
 import { ANALYSIS_VERSION, Comic, PageAnalysis, analyzePage, loadComics, saveComics } from './comics';
 import { FONT, FONT_BOLD, Settings, Theme, langName, tokenAt, tokenize, voiceOf, voiceTag, wordClock, shift } from './shared';
-import { BigButton, BusyOverlay, Chip, IconButton, OverlayButton, S } from './ui';
+import { BigButton, BusyOverlay, Chip, IconButton, OverlayButton, S, underline } from './ui';
 import Icon from './Icon';
 
 type Props = {
@@ -116,6 +116,8 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
   // the panel being read: shown sharp in the middle of the screen, the rest of the page blurred
   const [spot, setSpot] = useState<Box | null>(null);
   const [zoomNow, setZoomNow] = useState(1);
+  // the box is put in the middle of the screen (no clamping to the photo edges: an off-centre page or
+  // panel still ends up centred); scene = a panel being read, shown sharp with the rest blurred
   const focus = useCallback(
     (b: Box, scene = true) =>
       new Promise<void>((resolve) => {
@@ -128,15 +130,25 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
         const cfg = { duration: 700, easing: Easing.inOut(Easing.cubic), useNativeDriver: true };
         Animated.parallel([
           Animated.timing(zoom, { toValue: z, ...cfg }),
-          Animated.timing(tx, { toValue: shift(size.w / 2 - z * cx, size.w, page.width * base, z, scene), ...cfg }),
-          Animated.timing(ty, { toValue: shift(size.h / 2 - z * cy, size.h, page.height * base, z, scene), ...cfg }),
+          Animated.timing(tx, { toValue: shift(size.w / 2 - z * cx, size.w, page.width * base, z, true), ...cfg }),
+          Animated.timing(ty, { toValue: shift(size.h / 2 - z * cy, size.h, page.height * base, z, true), ...cfg }),
         ]).start(() => resolve());
       }),
     [page, size, base, zoom, tx, ty],
   );
-  const showWholePage = useCallback(() => {
-    if (page) focus({ left: 0, top: 0, width: page.width, height: page.height }, false);
-  }, [page, focus]);
+  // the whole page: once panels are known, the page itself is centred (not the photo with the table around it)
+  const showWholePage = useCallback(
+    (a?: PageAnalysis | null) => {
+      if (!page) return;
+      const boxes = (a === undefined ? analysis : a)?.scenes.map((sc) => sc.box) ?? [];
+      if (!boxes.length) { focus({ left: 0, top: 0, width: page.width, height: page.height }, false); return; }
+      const x0 = Math.min(...boxes.map((b) => b.left)), y0 = Math.min(...boxes.map((b) => b.top));
+      const x1 = Math.max(...boxes.map((b) => b.left + b.width)), y1 = Math.max(...boxes.map((b) => b.top + b.height));
+      const pad = Math.max(x1 - x0, y1 - y0) * 0.03;
+      focus({ left: x0 - pad, top: y0 - pad, width: x1 - x0 + 2 * pad, height: y1 - y0 + 2 * pad }, false);
+    },
+    [page, analysis, focus],
+  );
 
   // playback runs across renders (e.g. full screen switched on mid-page): always aim with the current size
   const aim = useRef({ focus, whole: showWholePage });
@@ -220,7 +232,7 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
     if (screen.kind !== 'read' || !comic || !page || !size.w) return;
     let cancelled = false;
     (async () => {
-      showWholePage();
+      showWholePage(null);
       const wantClaude = settings.engine === 'claude' && !!apiKey;
       let a = page.analysis;
       const usable = a && a.version === ANALYSIS_VERSION && a.target === settings.target && (a.engine === 'claude' || !wantClaude);
@@ -256,6 +268,7 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
       const v = tr ? 'tr' : 'or';
       setView(v);
       if (settings.autoRead) playFrom(a, 0, 0, v);
+      else aim.current.whole(a);
     })();
     return () => { cancelled = true; };
     // run when the page (or the viewer size) changes, not on every analysis save
@@ -402,18 +415,13 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
                 <Pressable
                   key={`${si}-${bi}`}
                   onPress={() => analysis && playFrom(analysis, si, bi, view)}
-                  style={[c.bubble, place(b.box, 3 / zoomNow), cursor?.scene === si && cursor.bubble === bi && [c.bubbleNow, { borderWidth: 2 / zoomNow }]]}
+                  style={[c.bubble, place(b.box, 3 / zoomNow)]}
                   accessibilityRole="button"
                   accessibilityLabel="Czytaj od tego dymka"
                 />
               )),
             )}
-            {wordBox && (
-              <View
-                pointerEvents="none"
-                style={[c.word, place(wordBox, 1 / zoomNow), { borderWidth: 1.5 / zoomNow, borderRadius: 3 / zoomNow }]}
-              />
-            )}
+            {wordBox && <View pointerEvents="none" style={underline(place(wordBox), zoomNow)} />}
           </Animated.View>
         )}
         <OverlayButton
@@ -499,8 +507,6 @@ function styles(t: Theme) {
     viewer: { flex: 1, backgroundColor: '#0d1424' },
     viewerFull: { flex: 1, backgroundColor: '#000', overflow: 'hidden' },
     bubble: { position: 'absolute', borderRadius: 8 },
-    bubbleNow: { borderColor: '#ffd23f', backgroundColor: 'rgba(255,210,63,0.12)' },
-    word: { position: 'absolute', borderColor: '#e63946', backgroundColor: 'rgba(255,233,138,0.22)' },
     spot: { position: 'absolute', overflow: 'hidden' },
     info: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingHorizontal: 12, paddingTop: 8, alignItems: 'center' },
     switch: { minHeight: 30, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1.5, borderColor: t.ink, justifyContent: 'center', backgroundColor: t.surface },
