@@ -9,7 +9,8 @@ import Eraser from './Eraser';
 import Camera from './Camera';
 import { ANALYSIS_VERSION, Comic, PageAnalysis, analyzePage, loadComics, saveComics } from './comics';
 import { FONT, FONT_BOLD, Settings, Theme, langName, tokenAt, tokenize, voiceOf, voiceTag, wordClock, shift } from './shared';
-import { BigButton, BusyOverlay, Chip, IconButton, OverlayButton, S, underline } from './ui';
+import { BigButton, BusyOverlay, Chip, IconButton, OverlayButton, S, marker } from './ui';
+import { ViewState, usePinch } from './usePinch';
 import Icon from './Icon';
 
 type Props = {
@@ -49,6 +50,8 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
   const zoom = useRef(new Animated.Value(1)).current;
   const tx = useRef(new Animated.Value(0)).current;
   const ty = useRef(new Animated.Value(0)).current;
+  const cur = useRef<ViewState>({ z: 1, x: 0, y: 0 });
+  const viewerRef = useRef<View>(null);
 
   useEffect(() => { loadComics().then(setComics); }, []);
   useEffect(() => () => { playToken.current++; Speech.stop(); }, []);
@@ -127,11 +130,14 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
         const cx = (b.left + b.width / 2) * base, cy = (b.top + b.height / 2) * base;
         setSpot(scene ? b : null);
         setZoomNow(z);
+        const x = shift(size.w / 2 - z * cx, size.w, page.width * base, z, true);
+        const y = shift(size.h / 2 - z * cy, size.h, page.height * base, z, true);
+        cur.current = { z, x, y };
         const cfg = { duration: 700, easing: Easing.inOut(Easing.cubic), useNativeDriver: true };
         Animated.parallel([
           Animated.timing(zoom, { toValue: z, ...cfg }),
-          Animated.timing(tx, { toValue: shift(size.w / 2 - z * cx, size.w, page.width * base, z, true), ...cfg }),
-          Animated.timing(ty, { toValue: shift(size.h / 2 - z * cy, size.h, page.height * base, z, true), ...cfg }),
+          Animated.timing(tx, { toValue: x, ...cfg }),
+          Animated.timing(ty, { toValue: y, ...cfg }),
         ]).start(() => resolve());
       }),
     [page, size, base, zoom, tx, ty],
@@ -284,6 +290,12 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
   }, [size.w, size.h]);
 
   const onLayout = (e: LayoutChangeEvent) => setSize({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height });
+  // pinch to zoom, drag to move; the next panel brings the automatic view back
+  const pinch = usePinch({
+    zoom, tx, ty, cur, viewer: viewerRef,
+    size: () => ({ w: (page?.width ?? 0) * base, h: (page?.height ?? 0) * base }),
+    onEnd: (v) => setZoomNow(v.z),
+  });
 
   // ---------- render: list ----------
   if (screen.kind === 'list') {
@@ -388,7 +400,7 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
   return (
     <View key="read" style={{ flex: 1 }}>
       {eraser}
-      <View style={immersive ? c.viewerFull : [s.lens, c.viewer]} onLayout={onLayout}>
+      <View ref={viewerRef} style={immersive ? c.viewerFull : [s.lens, c.viewer]} onLayout={onLayout} {...pinch}>
         {page && size.w > 0 && (
           <Animated.View
             style={{
@@ -421,7 +433,7 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
                 />
               )),
             )}
-            {wordBox && <View pointerEvents="none" style={underline(place(wordBox), zoomNow)} />}
+            {wordBox && <View pointerEvents="none" style={marker(place(wordBox), zoomNow)} />}
           </Animated.View>
         )}
         <OverlayButton

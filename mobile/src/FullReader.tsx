@@ -4,8 +4,9 @@ import { Text } from './Text';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Box, OcrWord } from '../modules/reader-mlkit/src/ReaderMlkitModule';
 import { FONT_BOLD, Theme, Token, shift } from './shared';
-import { OverlayButton, S, underline } from './ui';
+import { OverlayButton, S, marker } from './ui';
 import Icon from './Icon';
+import { ViewState, usePinch } from './usePinch';
 
 type Seg = { box?: Box; words: OcrWord[] };
 type Props = {
@@ -37,6 +38,8 @@ export default function FullReader(p: Props) {
   const zoom = useRef(new Animated.Value(1)).current;
   const tx = useRef(new Animated.Value(0)).current;
   const ty = useRef(new Animated.Value(0)).current;
+  const cur = useRef<ViewState>({ z: 1, x: 0, y: 0 });
+  const viewerRef = useRef<View>(null);
   const base = size.w ? Math.min(size.w / p.imgW, size.h / p.imgH) : 1;
   const W = p.imgW * base;
   const H = p.imgH * base;
@@ -66,6 +69,7 @@ export default function FullReader(p: Props) {
     const x = shift(size.w / 2 - z * cx, size.w, W, z);
     const y = shift(size.h / 2 - z * cy, size.h, H, z);
     setZoomNow(z);
+    cur.current = { z, x, y };
     const cfg = { duration: 450, easing: Easing.inOut(Easing.cubic), useNativeDriver: true };
     Animated.parallel([
       Animated.timing(zoom, { toValue: z, ...cfg }),
@@ -75,12 +79,15 @@ export default function FullReader(p: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size.w, size.h, p.current, lineKey, p.photoUri]);
 
+  // pinch to zoom, drag to move; the next fragment or line brings the automatic view back
+  const pinch = usePinch({ zoom, tx, ty, cur, viewer: viewerRef, size: () => ({ w: W, h: H }), onEnd: (v) => setZoomNow(v.z) });
+
   const place = (b: Box, pad = 0) => ({ left: b.left * base - pad, top: b.top * base - pad, width: b.width * base + 2 * pad, height: b.height * base + 2 * pad });
   const c = styles(p.t);
 
   return (
     <View style={[c.root, { paddingTop: insets.top + 6, paddingBottom: insets.bottom + 10 }]}>
-      <View style={c.viewer} onLayout={(e: LayoutChangeEvent) => setSize({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}>
+      <View ref={viewerRef} style={c.viewer} onLayout={(e: LayoutChangeEvent) => setSize({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })} {...pinch}>
         {size.w > 0 && (
           <Animated.View
             style={{
@@ -102,7 +109,7 @@ export default function FullReader(p: Props) {
               ) : null,
             )}
             {p.wordBox && (
-              <View pointerEvents="none" style={underline(place(p.wordBox), zoomNow)} />
+              <View pointerEvents="none" style={marker(place(p.wordBox), zoomNow)} />
             )}
           </Animated.View>
         )}

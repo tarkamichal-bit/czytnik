@@ -7,7 +7,16 @@ import Icon, { IconName } from './Icon';
 export type S = ReturnType<typeof makeStyles>;
 
 type Rect = { left: number; top: number; width: number; height: number };
-/** A red line just under the word being read (r in view pixels; z = current zoom, so it stays thin). */
+/** The word being read, as with a highlighter pen: see-through yellow, no frame, so no letter is hidden
+ *  (an underline ran into the next line). r in view pixels; z = current zoom. */
+export function marker(r: Rect, z = 1) {
+  const pad = 1.5 / z;
+  return {
+    position: 'absolute' as const, left: r.left - pad, top: r.top - pad, width: r.width + 2 * pad, height: r.height + 2 * pad,
+    borderRadius: 3 / z, backgroundColor: 'rgba(255,214,0,0.4)',
+  };
+}
+
 export function underline(r: Rect, z = 1) {
   return {
     position: 'absolute' as const, left: r.left, top: r.top + r.height + 2 / z, width: r.width,

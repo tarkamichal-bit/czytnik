@@ -8,7 +8,7 @@ export type Bubble = { text: string; translation: string; box: Box; words: OcrWo
 export type Scene = { box: Box; bubbles: Bubble[] };
 export type PageAnalysis = { version?: number; target: string; engine: Engine; lang: string; scenes: Scene[]; note?: string };
 /** Bump when the analysis changes, so pages read by an older version are analysed again. */
-export const ANALYSIS_VERSION = 4;
+export const ANALYSIS_VERSION = 5;
 export type ComicPage = SavedPage & { analysis?: PageAnalysis };
 export type Comic = { id: string; title: string; createdAt: number; pages: ComicPage[] };
 
@@ -45,10 +45,10 @@ function groupNear(items: Bubble[], maxArea: number): Bubble[][] {
   }
   return out;
 }
-/** Some artwork around a group of bubbles, kept inside the panel; at least about a third of the page wide. */
+/** Plenty of artwork around a group of bubbles, kept inside the panel: at least half of it each way. */
 function frameAround(b: Box, within: Box, page: Box): Box {
-  const w = Math.min(within.width, Math.max(page.width * 0.35, b.width * 1.8));
-  const h = Math.min(within.height, Math.max(w * 0.75, b.height * 2.4));
+  const w = Math.min(within.width, Math.max(page.width * 0.5, within.width * 0.55, b.width * 2));
+  const h = Math.min(within.height, Math.max(w * 0.8, within.height * 0.55, b.height * 3));
   const c = center(b);
   const left = Math.max(within.left, Math.min(within.left + within.width - w, c.x - w / 2));
   const top = Math.max(within.top, Math.min(within.top + within.height - h, c.y - h / 2));
@@ -180,11 +180,11 @@ export async function analyzePage(original: SavedPage, o: Analyze): Promise<{ an
       box: p,
       bubbles: order ? groups[i].sort((a, b) => (rank.get(a) ?? 0) - (rank.get(b) ?? 0)) : readingOrder(groups[i]),
     }));
-    // a "panel" over a large part of the page with bubbles far apart is most likely several panels that
+    // a "panel" over most of the page with bubbles far apart is most likely several panels that
     // could not be separated: then nearby bubbles are shown together, each group zoomed in on its own
     const all = union(panels);
     scenes = scenes.flatMap((sc) => {
-      if (sc.bubbles.length < 2 || area(sc.box) < area(all) * 0.45) return [sc];
+      if (sc.bubbles.length < 2 || area(sc.box) < area(all) * 0.7) return [sc];
       return groupNear(sc.bubbles, area(all) * 0.12).map((g) => ({ box: frameAround(union(g.map((b) => b.box)), sc.box, all), bubbles: g }));
     });
   } else {

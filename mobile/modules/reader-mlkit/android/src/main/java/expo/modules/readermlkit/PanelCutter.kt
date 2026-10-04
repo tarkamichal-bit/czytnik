@@ -24,9 +24,10 @@ object PanelCutter {
   fun cut(lum: IntArray, w: Int, h: Int, texts: List<IntArray> = emptyList()): List<IntArray> {
     if (w < 8 || h < 8) return listOf(intArrayOf(0, 0, w, h))
     val light0 = lightMap(lum, w, h)
-    clearBubbles(light0, w, h, texts)
+    val bubble0 = bubbleMask(light0, w, h, texts)
     val angle = skew(light0, w, h)
     val light = if (angle == 0.0) light0 else rotate(light0, w, h, angle)
+    val bubble = if (angle == 0.0) bubble0 else rotate(bubble0, w, h, angle, outside = false)
 
     // Regions are pixel masks (label = region id), so a cut may run along a slightly slanted
     // gutter (a phone photo is rarely square-on: perspective makes gutters converge).
@@ -34,7 +35,13 @@ object PanelCutter {
     val label = pageMask(light, w, h)
     val longest = max(w, h)
     val frameLen = max(24, (longest * 0.1).toInt())
-    val cx = Cutter(light, w, h, label, frameRuns(light, w, h, frameLen, vertical = true), frameRuns(light, w, h, frameLen, vertical = false))
+    // a gutter line may cross a speech bubble (passable), but never a panel border; panel extents are
+    // measured on the real picture, so a bubble at the panel's edge still belongs to the panel
+    val passable = BooleanArray(w * h) { light[it] || bubble[it] }
+    val vFrame = frameRuns(light, w, h, frameLen, vertical = true)
+    val hFrame = frameRuns(light, w, h, frameLen, vertical = false)
+    for (i in 0 until w * h) if (bubble[i]) { vFrame[i] = false; hFrame[i] = false }
+    val cx = Cutter(light, passable, w, h, label, vFrame, hFrame)
     val minGap = max(3, (longest * 0.006).toInt())
     val out = mutableListOf<IntArray>()
     val all = bboxOf(label, w, h, 0) ?: intArrayOf(0, 0, w, h)
@@ -46,10 +53,11 @@ object PanelCutter {
     return if (angle == 0.0) boxes else boxes.map { unrotate(it, w, h, angle) }
   }
 
-  /** Marks each text's bubble as paper: the light area around the text is flood-filled; when it stays
+  /** The speech bubbles around recognised texts: the light area around the text is flood-filled; when it stays
    *  enclosed (a bubble or a caption box), it is cleared together with its outline. Otherwise (an outline
    *  with a gap, or text on artwork) the oval a bubble around that text would take is cleared. */
-  internal fun clearBubbles(light: BooleanArray, w: Int, h: Int, texts: List<IntArray>) {
+  internal fun bubbleMask(light: BooleanArray, w: Int, h: Int, texts: List<IntArray>): BooleanArray {
+    val mark = BooleanArray(w * h)
     val ring = max(2, (max(w, h) * 0.006).roundToInt()) + 1
     val seen = IntArray(w * h)
     val queue = IntArray(w * h)
@@ -83,9 +91,9 @@ object PanelCutter {
         val rx = (tx1 - tx0) * 0.5 * 1.45 + ring * 2; val ry = (ty1 - ty0) * 0.5 * 1.6 + ring * 2
         for (y in max(0, (cy - ry).toInt())..min(h - 1, (cy + ry).toInt())) for (x in max(0, (cx - rx).toInt())..min(w - 1, (cx + rx).toInt())) {
           val dx = (x - cx) / rx; val dy = (y - cy) / ry
-          if (dx * dx + dy * dy <= 1.0) light[y * w + x] = true
+          if (dx * dx + dy * dy <= 1.0) mark[y * w + x] = true
         }
-        for (y in ty0 until ty1) for (x in tx0 until tx1) light[y * w + x] = true
+        for (y in ty0 until ty1) for (x in tx0 until tx1) mark[y * w + x] = true
         continue
       }
       // the bubble: the box around the filled area and the text, widened by the outline. (Letters and
@@ -95,8 +103,9 @@ object PanelCutter {
         val x = queue[k] % w; val y = queue[k] / w
         if (x < bx0) bx0 = x; if (x > bx1) bx1 = x; if (y < by0) by0 = y; if (y > by1) by1 = y
       }
-      for (y in max(0, by0 - ring)..min(h - 1, by1 + ring)) for (x in max(0, bx0 - ring)..min(w - 1, bx1 + ring)) light[y * w + x] = true
+      for (y in max(0, by0 - ring)..min(h - 1, by1 + ring)) for (x in max(0, bx0 - ring)..min(w - 1, bx1 + ring)) mark[y * w + x] = true
     }
+    return mark
   }
 
   private fun bboxOf(label: IntArray, w: Int, h: Int, id: Int): IntArray? {
@@ -205,7 +214,7 @@ object PanelCutter {
   }
 
   private class Cutter(
-    val light: BooleanArray, val w: Int, val h: Int, val label: IntArray,
+    val light: BooleanArray, val passable: BooleanArray, val w: Int, val h: Int, val label: IntArray,
     /** on a vertical border: such a pixel on a row means the row runs through a panel, not along a gutter */
     val vFrame: BooleanArray, val hFrame: BooleanArray,
   ) {
@@ -227,7 +236,7 @@ object PanelCutter {
           if (label[i] != id) continue
           val o = (if (horizontal) y - y0 - t * (x - xm) else x - x0 - t * (y - ym)).roundToInt() + off
           cnt[o]++
-          if (light[i]) lit[o]++
+          if (passable[i]) lit[o]++
           if (if (horizontal) vFrame[i] else hFrame[i]) frame[o]++
         }
         val gutter = BooleanArray(n) { cnt[it] == 0 || (lit[it] >= cnt[it] * 0.93 && frame[it] == 0) }
@@ -351,14 +360,14 @@ object PanelCutter {
   }
 
   /** The light map turned by -angle (so the page becomes straight); outside the photo counts as paper. */
-  internal fun rotate(light: BooleanArray, w: Int, h: Int, angle: Double): BooleanArray {
+  internal fun rotate(light: BooleanArray, w: Int, h: Int, angle: Double, outside: Boolean = true): BooleanArray {
     val rad = Math.toRadians(angle); val c = cos(rad); val s = sin(rad)
     val cx = w / 2.0; val cy = h / 2.0
     return BooleanArray(w * h) { i ->
       val x = i % w; val y = i / w
       val sx = (c * (x - cx) - s * (y - cy) + cx).roundToInt()
       val sy = (s * (x - cx) + c * (y - cy) + cy).roundToInt()
-      if (sx !in 0 until w || sy !in 0 until h) true else light[sy * w + sx]
+      if (sx !in 0 until w || sy !in 0 until h) outside else light[sy * w + sx]
     }
   }
 
