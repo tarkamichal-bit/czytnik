@@ -18,6 +18,9 @@ import kotlin.math.sin
  *  - straightened: the small rotation (up to ±4°) that makes the gutters most straight is undone.
  */
 object PanelCutter {
+  /** How the last page was cut ("frames" or "gutters"), for the log. */
+  @Volatile var lastMethod = ""
+
   /** Returns panels as [x0, y0, x1, y1] (x1/y1 exclusive) in the input's pixel space.
    *  texts: boxes of recognised text ([x0, y0, x1, y1]); their speech bubbles are treated as paper,
    *  so a bubble drawn across a gutter does not glue two panels together. */
@@ -26,7 +29,8 @@ object PanelCutter {
     val light0 = lightMap(lum, w, h)
     val bubble0 = bubbleMask(light0, w, h, texts)
     // panels drawn with a border: each border is one closed dark outline, whatever the perspective
-    framed(light0, bubble0, w, h)?.let { return it }
+    framed(light0, bubble0, w, h)?.let { lastMethod = "frames"; return it }
+    lastMethod = "gutters"
     val angle = skew(light0, w, h)
     val light = if (angle == 0.0) light0 else rotate(light0, w, h, angle)
     val bubble = if (angle == 0.0) bubble0 else rotate(bubble0, w, h, angle, outside = false)

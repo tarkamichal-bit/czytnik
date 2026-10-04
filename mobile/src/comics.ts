@@ -8,7 +8,7 @@ export type Bubble = { text: string; translation: string; box: Box; words: OcrWo
 export type Scene = { box: Box; bubbles: Bubble[] };
 export type PageAnalysis = { version?: number; target: string; engine: Engine; lang: string; scenes: Scene[]; note?: string };
 /** Bump when the analysis changes, so pages read by an older version are analysed again. */
-export const ANALYSIS_VERSION = 7;
+export const ANALYSIS_VERSION = 8;
 export type ComicPage = SavedPage & { analysis?: PageAnalysis };
 export type Comic = { id: string; title: string; createdAt: number; pages: ComicPage[] };
 
@@ -30,6 +30,7 @@ const center = (b: Box) => ({ x: b.left + b.width / 2, y: b.top + b.height / 2 }
 const contains = (b: Box, p: { x: number; y: number }) => p.x >= b.left && p.x <= b.left + b.width && p.y >= b.top && p.y <= b.top + b.height;
 
 const area = (b: Box) => b.width * b.height;
+const roundBox = (b: Box) => [b.left, b.top, b.width, b.height].map(Math.round);
 /** Intersection over union of two boxes (0–1). */
 function overlap(a: Box, b: Box) {
   const w = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left);
@@ -203,6 +204,7 @@ export async function analyzePage(original: SavedPage, o: Analyze): Promise<{ an
       let same: Box | undefined;
       let best = 0.3;
       for (const p of panels) { const o = overlap(p, box); if (o > best) { best = o; same = p; } }
+      console.log(`[komiks] panel ${k}: ${same ? 'ramka' : 'tylko Claude'} ${JSON.stringify(roundBox(same ?? box))}, dymki ${groups[k].length}`);
       return { box: same ?? box, bubbles: byRank(groups[k]) };
     });
   } else if (panels.length > 1) {
@@ -226,6 +228,7 @@ export async function analyzePage(original: SavedPage, o: Analyze): Promise<{ an
     scenes = groupNear(ordered, area(whole) * 0.12).map((g) => ({ box: frameAround(union(g.map((b) => b.box)), whole, whole), bubbles: g }));
     if (!scenes.length) scenes = [{ box: whole, bubbles: [] }];
   }
+  console.log(`[komiks] ${page.width}x${page.height}: ramki/rynny ${panels.length}, Claude ${cPanels?.length ?? 0}, sceny ${scenes.length}`);
   // a scene always shows all of its bubbles and captions, also those sticking out of the panel
   const pad = Math.max(page.width, page.height) * 0.01;
   scenes = scenes.map((sc) => {

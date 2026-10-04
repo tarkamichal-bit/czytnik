@@ -119,19 +119,24 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
   // the panel being read: shown sharp in the middle of the screen, the rest of the page blurred
   const [spot, setSpot] = useState<Box | null>(null);
   const [zoomNow, setZoomNow] = useState(1);
+  // full screen: the button band covers the bottom of the photo and the status bar its top,
+  // so panels are centred in the part in between
+  const [bandH, setBandH] = useState(0);
   // the box is put in the middle of the screen (no clamping to the photo edges: an off-centre page or
   // panel still ends up centred); scene = a panel being read, shown sharp with the rest blurred
   const focus = useCallback(
     (b: Box, scene = true) =>
       new Promise<void>((resolve) => {
         if (!page || !size.w) return resolve();
+        const top = immersive ? insets.top : 0;
+        const vh = Math.max(1, size.h - top - (immersive ? bandH : 0));
         const bw = b.width * base, bh = b.height * base;
-        const z = Math.min(5, Math.min(size.w / bw, size.h / bh) * (scene ? 0.96 : 1));
+        const z = Math.min(5, Math.min(size.w / bw, vh / bh) * (scene ? 0.96 : 1));
         const cx = (b.left + b.width / 2) * base, cy = (b.top + b.height / 2) * base;
         setSpot(scene ? b : null);
         setZoomNow(z);
         const x = shift(size.w / 2 - z * cx, size.w, page.width * base, z, true);
-        const y = shift(size.h / 2 - z * cy, size.h, page.height * base, z, true);
+        const y = shift(top + vh / 2 - z * cy, size.h, page.height * base, z, true);
         cur.current = { z, x, y };
         const cfg = { duration: 700, easing: Easing.inOut(Easing.cubic), useNativeDriver: true };
         Animated.parallel([
@@ -140,7 +145,7 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
           Animated.timing(ty, { toValue: y, ...cfg }),
         ]).start(() => resolve());
       }),
-    [page, size, base, zoom, tx, ty],
+    [page, size, base, zoom, tx, ty, immersive, insets.top, bandH],
   );
   // the whole page: once panels are known, the page itself is centred (not the photo with the table around it)
   const showWholePage = useCallback(
@@ -287,7 +292,7 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
     const scn = cursor && analysis ? analysis.scenes[cursor.scene] : null;
     if (scn) focus(scn.box); else showWholePage();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [size.w, size.h]);
+  }, [size.w, size.h, bandH, immersive]);
 
   const onLayout = (e: LayoutChangeEvent) => setSize({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height });
   // pinch to zoom, drag to move; the next panel brings the automatic view back
@@ -444,7 +449,7 @@ export default function ComicMode({ s, t, settings, apiKey, addUsage, bottomInse
           pos={{ right: 10, top: 10 }}
         />
         {immersive && (
-          <View style={[c.band, { paddingBottom: insets.bottom + 10 }]}>
+          <View style={[c.band, { paddingBottom: insets.bottom + 10 }]} onLayout={(e) => setBandH(e.nativeEvent.layout.height)}>
             <View style={c.bandRow}>
               <Pressable style={c.round} onPress={prevPage} accessibilityRole="button" accessibilityLabel={pageIdx > 0 ? 'Poprzednia strona' : 'Wróć do listy'}>
                 <Icon name={pageIdx > 0 ? 'prev' : 'list'} size={26} color="#fff" />

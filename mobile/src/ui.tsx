@@ -7,13 +7,13 @@ import Icon, { IconName } from './Icon';
 export type S = ReturnType<typeof makeStyles>;
 
 type Rect = { left: number; top: number; width: number; height: number };
-/** The word being read, as with a highlighter pen: see-through yellow, no frame, so no letter is hidden
- *  (an underline ran into the next line). r in view pixels; z = current zoom. */
+/** The word being read, as with a highlighter pen: see-through pink, no frame, so no letter is hidden
+ *  (an underline ran into the next line; yellow vanished on yellow captions). r in view pixels; z = current zoom. */
 export function marker(r: Rect, z = 1) {
   const pad = 1.5 / z;
   return {
     position: 'absolute' as const, left: r.left - pad, top: r.top - pad, width: r.width + 2 * pad, height: r.height + 2 * pad,
-    borderRadius: 3 / z, backgroundColor: 'rgba(255,214,0,0.4)',
+    borderRadius: 3 / z, backgroundColor: 'rgba(255,40,150,0.32)',
   };
 }
 

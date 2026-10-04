@@ -175,7 +175,9 @@ class ReaderMlkitModule : Module() {
       val boxes = texts.chunked(4).filter { it.size == 4 }.map { b ->
         intArrayOf((b[0] * k).roundToInt(), (b[1] * k).roundToInt(), ((b[0] + b[2]) * k).roundToInt(), ((b[1] + b[3]) * k).roundToInt())
       }
-      return@AsyncFunction PanelCutter.cut(lum, w, h, boxes).map { r ->
+      val cut = PanelCutter.cut(lum, w, h, boxes)
+      android.util.Log.i("PanelCutter", "${cut.size} panels by ${PanelCutter.lastMethod} (${w}x$h, ${boxes.size} texts)")
+      return@AsyncFunction cut.map { r ->
         mapOf(
           "left" to (r[0] / k).roundToInt(), "top" to (r[1] / k).roundToInt(),
           "width" to ((r[2] - r[0]) / k).roundToInt(), "height" to ((r[3] - r[1]) / k).roundToInt(),
