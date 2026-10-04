@@ -8,7 +8,7 @@ export type Bubble = { text: string; translation: string; box: Box; words: OcrWo
 export type Scene = { box: Box; bubbles: Bubble[] };
 export type PageAnalysis = { version?: number; target: string; engine: Engine; lang: string; scenes: Scene[]; note?: string };
 /** Bump when the analysis changes, so pages read by an older version are analysed again. */
-export const ANALYSIS_VERSION = 5;
+export const ANALYSIS_VERSION = 6;
 export type ComicPage = SavedPage & { analysis?: PageAnalysis };
 export type Comic = { id: string; title: string; createdAt: number; pages: ComicPage[] };
 
@@ -30,6 +30,13 @@ const center = (b: Box) => ({ x: b.left + b.width / 2, y: b.top + b.height / 2 }
 const contains = (b: Box, p: { x: number; y: number }) => p.x >= b.left && p.x <= b.left + b.width && p.y >= b.top && p.y <= b.top + b.height;
 
 const area = (b: Box) => b.width * b.height;
+/** Intersection over union of two boxes (0–1). */
+function overlap(a: Box, b: Box) {
+  const w = Math.min(a.left + a.width, b.left + b.width) - Math.max(a.left, b.left);
+  const h = Math.min(a.top + a.height, b.top + b.height) - Math.max(a.top, b.top);
+  if (w <= 0 || h <= 0) return 0;
+  return (w * h) / (area(a) + area(b) - w * h);
+}
 function union(boxes: Box[]): Box {
   const x0 = Math.min(...boxes.map((b) => b.left)), y0 = Math.min(...boxes.map((b) => b.top));
   const x1 = Math.max(...boxes.map((b) => b.left + b.width)), y1 = Math.max(...boxes.map((b) => b.top + b.height));
@@ -123,6 +130,9 @@ export async function analyzePage(original: SavedPage, o: Analyze): Promise<{ an
   let note: string | undefined;
   // reading order decided by Claude (indices into bubbles), when it ran
   let order: number[] | null = null;
+  // panels as Claude sees them (page pixels) and the panel of every bubble; null without Claude
+  let cPanels: Box[] | null = null;
+  let panelOf: number[] = [];
 
   if (o.engine === 'claude' && o.apiKey && bubbles.length) {
     o.onBusy('Claude czyta dymki i ustala kolejność…');
@@ -143,6 +153,12 @@ export async function analyzePage(original: SavedPage, o: Analyze): Promise<{ an
         // bubbles Claude forgot to order go after the ones it ordered
         bubbles.forEach((_, i) => { if (!skip.has(i) && !ord.includes(i)) ord.push(i); });
         order = ord;
+        if (c.panels.length) {
+          cPanels = c.panels.map((p) => ({ left: p.x0 * page.width, top: p.y0 * page.height, width: (p.x1 - p.x0) * page.width, height: (p.y1 - p.y0) * page.height }))
+            .filter((b) => b.width > page.width * 0.03 && b.height > page.height * 0.03);
+          if (cPanels.length === c.panels.length) panelOf = c.blocks.map((b) => b.panel);
+          else { cPanels = cPanels.length ? cPanels : null; panelOf = []; }
+        }
         lang = c.lang || o.target;
         engine = 'claude';
       } else {
@@ -169,17 +185,29 @@ export async function analyzePage(original: SavedPage, o: Analyze): Promise<{ an
   }
 
   let scenes: Scene[];
-  if (panels.length > 1) {
+  const rank = new Map<Bubble, number>();
+  order?.forEach((i, k) => { if (bubbles[i]) rank.set(bubbles[i], k); });
+  const byRank = (g: Bubble[]) => g.sort((a, b) => (rank.get(a) ?? 0) - (rank.get(b) ?? 0));
+  if (cPanels && order) {
+    // Claude's panels: it sees the whole picture (also panels without borders, a page photographed in a
+    // book, a hand on the page). Where the cutter found the same panel, its exact edges are used.
+    const cp = cPanels;
+    const groups: Bubble[][] = cp.map(() => []);
+    for (const i of order) {
+      const b = bubbles[i];
+      const k = panelOf[i] >= 0 && panelOf[i] < cp.length ? panelOf[i] : nearestPanel(cp, b.box);
+      groups[k].push(b);
+    }
+    scenes = cp.map((box, k) => {
+      const same = panels.find((p) => overlap(p, box) > 0.6);
+      return { box: same ?? box, bubbles: byRank(groups[k]) };
+    });
+  } else if (panels.length > 1) {
     // a panel is read completely before the next one (panels in reading order from the cutter);
     // inside a panel the bubbles follow Claude's order, or top-to-bottom / left-to-right
-    const rank = new Map<Bubble, number>();
-    order?.forEach((i, k) => { if (bubbles[i]) rank.set(bubbles[i], k); });
     const groups: Bubble[][] = panels.map(() => []);
     for (const b of bubbles) if (b.text.trim() && (!order || rank.has(b))) groups[nearestPanel(panels, b.box)].push(b);
-    scenes = panels.map((p, i) => ({
-      box: p,
-      bubbles: order ? groups[i].sort((a, b) => (rank.get(a) ?? 0) - (rank.get(b) ?? 0)) : readingOrder(groups[i]),
-    }));
+    scenes = panels.map((p, i) => ({ box: p, bubbles: order ? byRank(groups[i]) : readingOrder(groups[i]) }));
     // a "panel" over most of the page with bubbles far apart is most likely several panels that
     // could not be separated: then nearby bubbles are shown together, each group zoomed in on its own
     const all = union(panels);
@@ -195,5 +223,14 @@ export async function analyzePage(original: SavedPage, o: Analyze): Promise<{ an
     scenes = groupNear(ordered, area(whole) * 0.12).map((g) => ({ box: frameAround(union(g.map((b) => b.box)), whole, whole), bubbles: g }));
     if (!scenes.length) scenes = [{ box: whole, bubbles: [] }];
   }
+  // a scene always shows all of its bubbles and captions, also those sticking out of the panel
+  const pad = Math.max(page.width, page.height) * 0.01;
+  scenes = scenes.map((sc) => {
+    if (!sc.bubbles.length) return sc;
+    const u = union([sc.box, ...sc.bubbles.map((b) => b.box)]);
+    if (u.left === sc.box.left && u.top === sc.box.top && u.width === sc.box.width && u.height === sc.box.height) return sc;
+    const x0 = Math.max(0, u.left - pad), y0 = Math.max(0, u.top - pad);
+    return { ...sc, box: { left: x0, top: y0, width: Math.min(page.width, u.left + u.width + pad) - x0, height: Math.min(page.height, u.top + u.height + pad) - y0 } };
+  });
   return { analysis: { version: ANALYSIS_VERSION, target: o.target, engine, lang, scenes, note }, page };
 }

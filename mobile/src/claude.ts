@@ -99,13 +99,17 @@ export type ComicKind = (typeof KINDS)[number];
 
 const ComicSchema = z.object({
   lang: z.string(),
-  blocks: z.array(z.object({ text: z.string(), translation: z.string(), kind: z.enum(KINDS) })),
+  panels: z.array(z.object({ x0: z.number(), y0: z.number(), x1: z.number(), y1: z.number() })),
+  blocks: z.array(z.object({ text: z.string(), translation: z.string(), kind: z.enum(KINDS), panel: z.number().int() })),
   order: z.array(z.number().int()),
 });
 
 export type ClaudeComic = {
   lang: string;
-  blocks: { text: string; translation: string; kind: ComicKind }[];
+  /** Panels of the page in reading order, as fractions of the photo (0–1). */
+  panels: { x0: number; y0: number; x1: number; y1: number }[];
+  /** panel: index into panels, or -1 */
+  blocks: { text: string; translation: string; kind: ComicKind; panel: number }[];
   /** Indices of the blocks to read, in reading order (page numbers and other non-story text left out). */
   order: number[];
   inputTokens: number;
@@ -134,6 +138,12 @@ export async function readComicWithClaude(
     `"page_number" (numer strony) albo "other" (tytuł serii w stopce, nazwa wydawnictwa, prawa autorskie, szum z tła);\n` +
     `- "translation": jeśli tekst jest w innym języku niż "${target}" (${targetName}), naturalne tłumaczenie na ${targetName} do odczytania przez lektora dziecku; ` +
     `w przeciwnym razie to samo co "text".\n` +
+    `- "panel": numer kadru z listy "panels", do którego należy fragment (-1 dla "page_number" i "other").\n` +
+    `Na zdjęciu może być też kawałek sąsiedniej strony, dłoń albo stół: liczy się tylko strona główna (ta, która zajmuje największą część zdjęcia). ` +
+    `Tekst z sąsiedniej strony oznacz jako "other".\n` +
+    `W "panels" wypisz wszystkie kadry strony głównej w kolejności czytania. Każdy kadr to prostokąt x0, y0 (lewy górny róg) i x1, y1 (prawy dolny róg) ` +
+    `w skali 0–1000 względem całego zdjęcia, obejmujący cały kadr: jego ramkę oraz wszystkie dymki i ramki narratora, które do niego należą, także jeśli wystają poza ramkę. ` +
+    `Kadr to jedna scena: nie łącz kilku kadrów w jeden prostokąt.\n` +
     `W "order" podaj numery fragmentów do przeczytania w kolejności, w jakiej czyta się ten komiks: kadr po kadrze, ` +
     `a w kadrze dymki w kolejności rozmowy. Pomiń "page_number" i "other". ` +
     `W "lang" podaj kod ISO 639-1 języka komiksu.`;
@@ -163,7 +173,10 @@ export async function readComicWithClaude(
   const order = out.order.filter((i) => i >= 0 && i < out.blocks.length && !seen.has(i) && (seen.add(i), true));
   return {
     lang: out.lang.trim().toLowerCase().slice(0, 2),
-    blocks: out.blocks.map((b) => ({ text: b.text.trim(), translation: b.translation.trim(), kind: b.kind })),
+    panels: out.panels
+      .map((p) => ({ x0: Math.min(p.x0, p.x1) / 1000, y0: Math.min(p.y0, p.y1) / 1000, x1: Math.max(p.x0, p.x1) / 1000, y1: Math.max(p.y0, p.y1) / 1000 }))
+      .map((p) => ({ x0: Math.max(0, p.x0), y0: Math.max(0, p.y0), x1: Math.min(1, p.x1), y1: Math.min(1, p.y1) })),
+    blocks: out.blocks.map((b) => ({ text: b.text.trim(), translation: b.translation.trim(), kind: b.kind, panel: b.panel })),
     order,
     inputTokens,
     outputTokens,
