@@ -1,6 +1,11 @@
 package expo.modules.readermlkit
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
 import android.net.Uri
+import android.util.Base64
 import com.google.mlkit.common.model.DownloadConditions
 import com.google.mlkit.nl.languageid.LanguageIdentification
 import com.google.mlkit.nl.translate.TranslateLanguage
@@ -13,6 +18,12 @@ import expo.modules.kotlin.Promise
 import expo.modules.kotlin.exception.Exceptions
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileOutputStream
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
 
 class ReaderMlkitModule : Module() {
   private val recognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
@@ -21,7 +32,39 @@ class ReaderMlkitModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("ReaderMlkit")
 
-    // Text from a photo; one paragraph per ML Kit block, lines of a block joined into running text.
+    // Crops the photo to the on-screen frame. The preview fills the view "cover"-style, so the
+    // frame (view pixels) is mapped back onto the upright photo. Returns the cropped JPEG file and,
+    // when maxSide > 0, a base64 JPEG scaled so its longer side is at most maxSide.
+    AsyncFunction("cropToFrame") { uri: String, viewW: Double, viewH: Double, left: Double, top: Double, right: Double, bottom: Double, maxSide: Int ->
+      val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
+      val src = upright(context, Uri.parse(uri))
+      val bw = src.width.toDouble()
+      val bh = src.height.toDouble()
+      val scale = max(viewW / bw, viewH / bh)
+      val offX = (viewW - bw * scale) / 2.0
+      val offY = (viewH - bh * scale) / 2.0
+      val x0 = ((left - offX) / scale).coerceIn(0.0, bw - 1)
+      val y0 = ((top - offY) / scale).coerceIn(0.0, bh - 1)
+      val x1 = ((right - offX) / scale).coerceIn(x0 + 1, bw)
+      val y1 = ((bottom - offY) / scale).coerceIn(y0 + 1, bh)
+      val crop = Bitmap.createBitmap(src, x0.roundToInt(), y0.roundToInt(), (x1 - x0).roundToInt().coerceAtLeast(1), (y1 - y0).roundToInt().coerceAtLeast(1))
+
+      val out = File(context.cacheDir, "czytnik-crop-${System.currentTimeMillis()}.jpg")
+      FileOutputStream(out).use { crop.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+
+      var b64: String? = null
+      if (maxSide > 0) {
+        val k = min(1.0, maxSide.toDouble() / max(crop.width, crop.height))
+        val small = if (k < 1.0) Bitmap.createScaledBitmap(crop, (crop.width * k).roundToInt(), (crop.height * k).roundToInt(), true) else crop
+        val bytes = ByteArrayOutputStream()
+        small.compress(Bitmap.CompressFormat.JPEG, 90, bytes)
+        b64 = Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP)
+      }
+      return@AsyncFunction mapOf("uri" to Uri.fromFile(out).toString(), "width" to crop.width, "height" to crop.height, "base64" to b64)
+    }
+
+    // Text from an image file with positions: one entry per ML Kit block (a paragraph or a comic
+    // bubble), lines joined into running text, plus each word's box in image pixels.
     AsyncFunction("recognize") { uri: String, promise: Promise ->
       val context = appContext.reactContext ?: throw Exceptions.ReactContextLost()
       val image = try {
@@ -32,18 +75,25 @@ class ReaderMlkitModule : Module() {
       }
       recognizer.process(image)
         .addOnSuccessListener { result ->
-          val paragraphs = result.textBlocks.map { block ->
+          val blocks = result.textBlocks.mapNotNull { block ->
             val sb = StringBuilder()
+            val words = mutableListOf<Map<String, Any>>()
             for (line in block.lines) {
               val t = line.text.trim()
               if (t.isEmpty()) continue
               if (sb.isEmpty()) sb.append(t)
               else if (sb.endsWith("-")) { sb.setLength(sb.length - 1); sb.append(t) }
               else sb.append(' ').append(t)
+              for (el in line.elements) {
+                val r = el.boundingBox ?: continue
+                words.add(mapOf("text" to el.text, "left" to r.left, "top" to r.top, "width" to r.width(), "height" to r.height()))
+              }
             }
-            sb.toString()
-          }.filter { it.isNotBlank() }
-          promise.resolve(paragraphs.joinToString("\n\n"))
+            val r = block.boundingBox
+            if (sb.isBlank() || r == null) null
+            else mapOf("text" to sb.toString(), "left" to r.left, "top" to r.top, "width" to r.width(), "height" to r.height(), "words" to words)
+          }
+          promise.resolve(mapOf("width" to image.width, "height" to image.height, "blocks" to blocks))
         }
         .addOnFailureListener { e -> promise.reject("ERR_OCR", e.message ?: "Text recognition failed", e) }
     }
@@ -74,5 +124,34 @@ class ReaderMlkitModule : Module() {
         .addOnSuccessListener { out -> translator.close(); promise.resolve(out) }
         .addOnFailureListener { e -> translator.close(); promise.reject("ERR_TRANSLATE", e.message ?: "Translation failed", e) }
     }
+  }
+
+  // Decodes the image and applies its EXIF rotation so width/height match what the user saw.
+  private fun upright(context: android.content.Context, uri: Uri): Bitmap {
+    val resolver = context.contentResolver
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    resolver.openInputStream(uri).use { BitmapFactory.decodeStream(it, null, bounds) }
+    // keep memory bounded on 50+ MP sensors; 4000 px is plenty for small print
+    var sample = 1
+    while (max(bounds.outWidth, bounds.outHeight) / (sample * 2) >= 4000) sample *= 2
+    val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+    val bmp = resolver.openInputStream(uri).use { BitmapFactory.decodeStream(it, null, opts) }
+      ?: throw IllegalArgumentException("Cannot decode image")
+    val orientation = resolver.openInputStream(uri).use { s ->
+      if (s == null) ExifInterface.ORIENTATION_NORMAL
+      else ExifInterface(s).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
+    }
+    val m = Matrix()
+    when (orientation) {
+      ExifInterface.ORIENTATION_ROTATE_90 -> m.postRotate(90f)
+      ExifInterface.ORIENTATION_ROTATE_180 -> m.postRotate(180f)
+      ExifInterface.ORIENTATION_ROTATE_270 -> m.postRotate(270f)
+      ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> m.postScale(-1f, 1f)
+      ExifInterface.ORIENTATION_FLIP_VERTICAL -> m.postScale(1f, -1f)
+      else -> return bmp
+    }
+    val rotated = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, m, true)
+    if (rotated !== bmp) bmp.recycle()
+    return rotated
   }
 }
