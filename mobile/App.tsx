@@ -67,8 +67,16 @@ const CROP_MARGIN = 0.02;
 
 // ---------- settings ----------
 type Engine = 'phone' | 'claude';
-type Settings = { target: string; rate: number; autoRead: boolean; contrast: boolean; size: number; engine: Engine };
-const DEFAULTS: Settings = { target: 'pl', rate: 0.9, autoRead: true, contrast: false, size: 28, engine: 'phone' };
+type VoiceStyle = 'normal' | 'elf' | 'giant';
+type Settings = { target: string; rate: number; autoRead: boolean; contrast: boolean; size: number; engine: Engine; voice: VoiceStyle };
+const DEFAULTS: Settings = { target: 'pl', rate: 0.9, autoRead: true, contrast: false, size: 28, engine: 'phone', voice: 'normal' };
+// Fairy-tale voices are the system voice with a changed pitch (Android: 0.5-2.0) and tempo
+const VOICES: { v: VoiceStyle; label: string; pitch: number; rateMul: number }[] = [
+  { v: 'normal', label: 'Zwykły', pitch: 1.0, rateMul: 1.0 },
+  { v: 'elf', label: 'Skrzat (bajkowy)', pitch: 1.9, rateMul: 1.08 },
+  { v: 'giant', label: 'Olbrzym', pitch: 0.55, rateMul: 0.9 },
+];
+const voiceOf = (v: VoiceStyle) => VOICES.find((x) => x.v === v) ?? VOICES[0];
 const RATES = [
   { v: 0.7, label: 'Wolno' },
   { v: 0.9, label: 'Spokojnie' },
@@ -180,7 +188,8 @@ function Main() {
   }, []);
 
   const speakFrom = useCallback(
-    (r: Reading, startSeg: number, v: 'tr' | 'or', lang: string, rate: number) => {
+    (r: Reading, startSeg: number, v: 'tr' | 'or', lang: string, rate: number, style: VoiceStyle) => {
+      const vs = voiceOf(style);
       speakToken.current++;
       const token = speakToken.current;
       Speech.stop();
@@ -196,7 +205,8 @@ function Main() {
         setCursor({ seg: i, token: 0 });
         Speech.speak(text, {
           language: voiceTag(lang),
-          rate,
+          rate: rate * vs.rateMul,
+          pitch: vs.pitch,
           onBoundary: (ev: { charIndex?: number }) => {
             if (token !== speakToken.current || typeof ev?.charIndex !== 'number') return;
             setCursor({ seg: i, token: tokenAt(tokens, ev.charIndex) });
@@ -282,7 +292,7 @@ function Main() {
       const translated = segments.some((g) => g.translation && g.translation !== g.text);
       const v = translated ? 'tr' : 'or';
       setView(v);
-      if (settings.autoRead) speakFrom(r, 0, v, translated ? settings.target : lang, settings.rate);
+      if (settings.autoRead) speakFrom(r, 0, v, translated ? settings.target : lang, settings.rate, settings.voice);
     } catch (e) {
       setError('Nie udało się odczytać zdjęcia. Spróbuj jeszcze raz.');
     } finally {
@@ -338,7 +348,7 @@ function Main() {
           g.box ? (
             <Pressable
               key={i}
-              onPress={() => speakFrom(r, i, view, speakLang, settings.rate)}
+              onPress={() => speakFrom(r, i, view, speakLang, settings.rate, settings.voice)}
               accessibilityRole="button"
               accessibilityLabel={`Czytaj od fragmentu ${i + 1}`}
               style={[s.segBox, place(g.box, 4), cursor?.seg === i && s.segBoxNow]}
@@ -466,7 +476,7 @@ function Main() {
             <BigButton s={s} label="Nowe zdjęcie" onPress={newPhoto} flex />
             <Pressable
               style={[s.big, s.secondary, cursor !== null && s.pressed]}
-              onPress={() => (cursor !== null ? stopSpeaking() : speakFrom(reading, 0, view, speakLang, settings.rate))}
+              onPress={() => (cursor !== null ? stopSpeaking() : speakFrom(reading, 0, view, speakLang, settings.rate, settings.voice))}
               disabled={!reading.segments.length}
               accessibilityRole="button"
               accessibilityLabel={cursor !== null ? 'Zatrzymaj czytanie' : 'Czytaj na głos'}
@@ -539,6 +549,25 @@ function Main() {
                 <Option key={r.v} s={s} label={r.label} on={settings.rate === r.v} onPress={() => update({ rate: r.v })} />
               ))}
             </View>
+            <Text style={s.label}>Głos lektora</Text>
+            <View style={s.grid}>
+              {VOICES.map((x) => (
+                <Option
+                  key={x.v}
+                  s={s}
+                  label={x.label}
+                  on={settings.voice === x.v}
+                  onPress={() => {
+                    update({ voice: x.v });
+                    Speech.stop();
+                    Speech.speak(x.v === 'elf' ? 'Hej! Poczytamy razem bajkę?' : x.v === 'giant' ? 'Ho ho, jestem wielki olbrzym.' : 'Dzień dobry, będę czytać tekst.', {
+                      language: 'pl-PL', rate: settings.rate * x.rateMul, pitch: x.pitch,
+                    });
+                  }}
+                />
+              ))}
+            </View>
+            <Text style={s.hintSmall}>Dotknij, aby posłuchać próbki.</Text>
             <View style={s.switchRow}>
               <Text style={[s.label, { flex: 1 }]}>Czytaj od razu po zdjęciu</Text>
               <Switch value={settings.autoRead} onValueChange={(v) => update({ autoRead: v })} />
